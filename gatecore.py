@@ -32,11 +32,20 @@ def load_json(path, default):
 def save_json(path, obj):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f: json.dump(obj, f, ensure_ascii=False, indent=1)
+    # 保留属主与权限: 原文件在则跟随原文件, 否则跟随所在目录。
+    # 否则 root 保存会把属主翻转, 低权限进程 (如守候巡查) 读不到文件时
+    # 可能误判"配置不存在"而重建凭据 (2026-11-22 实际发生过)。
+    try:
+        ref = path if os.path.exists(path) else os.path.dirname(path)
+        st = os.stat(ref)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        if os.path.exists(path): os.chmod(tmp, st.st_mode & 0o7777)
+    except Exception: pass
     os.replace(tmp, path)
 
 def get_config():
-    cfg = load_json(p("config.json"), None)
-    if cfg is None:
+    path = p("config.json")
+    if not os.path.exists(path):
         cfg = {
             "gateway_port": int(os.environ.get("GATECORE_PORT", "18500")),
             "gateway_user": "gate",
@@ -47,10 +56,16 @@ def get_config():
             "panel_user": "admin",
             "panel_pass": hashlib.sha256(os.urandom(32)).hexdigest()[:16],
         }
-        save_json(p("config.json"), cfg)
-        try: os.chmod(p("config.json"), 0o600)
+        save_json(path, cfg)
+        try: os.chmod(path, 0o600)
         except Exception: pass
         print("[config] 已生成 config.json（网关/面板凭据在内，0600）", flush=True)
+        return cfg
+    cfg = load_json(path, None)
+    if cfg is None:
+        # 文件存在却读不到/解析失败 (如权限被改、内容损坏): 宁可报错退出,
+        # 绝不静默重建一份新凭据——那会让网关与客户端凭据悄无声息地分家。
+        raise SystemExit("[config] config.json 存在但无法读取或解析, 拒绝静默重建: " + path)
     return cfg
 
 def get_state():
