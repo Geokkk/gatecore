@@ -1,0 +1,51 @@
+{
+  "log": { "loglevel": "warning" },
+  "dns": { "servers": ["1.1.1.1", "8.8.8.8"] },
+  "inbounds": [
+    {
+      "tag": "vmess-ws-tls",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [{ "id": "__UUID__", "alterId": 0 }]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "__DOMAIN__",
+          "certificates": [
+            { "certificateFile": "__CERT_FILE__", "keyFile": "__KEY_FILE__" }
+          ],
+          "alpn": ["h2", "http/1.1"]
+        },
+        "wsSettings": { "path": "__WS_PATH__" }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "egress",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": __GATECORE_PORT__,
+            "users": [{ "user": "__GW_USER__", "pass": "__GW_PASS__" }]
+          }
+        ]
+      }
+    },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "blocked", "protocol": "blackhole" }
+  ],
+  "routing": {
+    "rules": [
+      { "type": "field", "ip": ["geoip:private"], "outboundTag": "direct" },
+      { "type": "field", "network": "tcp,udp", "outboundTag": "egress" }
+    ]
+  }
+}

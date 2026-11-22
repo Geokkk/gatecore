@@ -87,7 +87,9 @@ sudo bash extras/xray/install-xray.sh
 
 链路：`客户端 → Xray(443, Reality) → gatecore 网关 → OpenVPN 隧道 → 家宽出口`。
 
-说明：安装脚本会从 GitHub 下载官方 Xray（版本锁定在与作者现网一致的 v26.3.27），并对照官方 `.dgst` 校验 sha256 后才安装；UUID、Reality 密钥均为本机随机生成。云厂商安全组记得放行 443/TCP。模板只有 Reality 入站；需要 VMess + 域名证书路线的，请自行按「与其它代理核心对接」一节把任意 Xray/sing-box 入站的出站指过来，原理相同。
+说明：安装脚本会从 GitHub 下载官方 Xray（版本锁定在与作者现网一致的 v26.3.27），并对照官方 `.dgst` 校验 sha256 后才安装；UUID、Reality 密钥均为本机随机生成。云厂商安全组记得放行 443/TCP。
+
+**域名路线（可选）**：已有域名、想要传统 VMess + WS + TLS 形态（作者现网用的就是这条）的，看 `extras/domain/`：一键脚本自动签 Let's Encrypt 证书并装好续期，附订阅分发示例。与 Reality 路线二选一，细节见该目录的 README。
 
 ## 与其它代理核心对接
 
