@@ -874,6 +874,15 @@ class Panel(BaseHTTPRequestHandler):
         <div class=frow><form method=get action='%s/'><label>筛选国家</label> <input name=cc size=3 value='%s' placeholder='JP/KR/US'>
         <label><input type=checkbox name=res value=1%s> 只看家宽</label>
         <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "")
+        acct = """<div class=card><h2>账号设置</h2>
+        <div class=frow><form method=post action='%s/account_panel'><label>面板登录</label> <input name=user size=12 value='%s' autocomplete=username>
+        <input type=password name=pass1 size=14 placeholder='新密码（至少 8 位）' autocomplete=new-password>
+        <input type=password name=pass2 size=14 placeholder='再输一次' autocomplete=new-password> <button>修改面板凭据</button></form></div>
+        <div class=frow><form method=post action='%s/account_gateway'><label>网关凭据</label> <input name=user size=12 value='%s' autocomplete=off>
+        <input type=password name=pass1 size=14 placeholder='新密码（至少 8 位）' autocomplete=new-password>
+        <input type=password name=pass2 size=14 placeholder='再输一次' autocomplete=new-password> <button class=gray>修改网关凭据</button></form></div>
+        <div class=note>网关凭据修改后新连接即刻生效；指向本网关的客户端 / 核心（如 Xray 出站）必须同步改成新凭据，否则会连不上。面板凭据修改后，下次打开面板用新账号密码登录。</div></div>""" % (
+            base, esc(self.cfg["panel_user"]), base, esc(self.cfg["gateway_user"]))
         wst = load_json(p("watch_state.json"), {})
         wrows = []
         for ccw in st.get("watch", []):
@@ -916,7 +925,7 @@ class Panel(BaseHTTPRequestHandler):
             esc(cc or "全部"), len(ranked), res_ranked, "" if cc else "，显示前 60", auto_btn, "".join(rows))
         ev = "\n".join("%s  %s" % (e["t"], e["msg"]) for e in st.get("events", [])[-15:][::-1])
         log = "<div class=card><h2>事件</h2><pre>%s</pre></div>" % esc(ev)
-        self._send(self._page("<div class=wrap>" + top + status + stats + err_html + ctrl + watch_card + table + log + "</div>"))
+        self._send(self._page("<div class=wrap>" + top + status + stats + err_html + ctrl + acct + watch_card + table + log + "</div>"))
 
     def do_POST(self):
         base = "/" + self.cfg["panel_path"]
@@ -953,6 +962,28 @@ class Panel(BaseHTTPRequestHandler):
             set_state(st)
             add_event("守候名单更新：%s（间隔 %d 分钟，仅通知不连接）" % (",".join(codes) or "空", st["watch_interval"] // 60))
             self.send_response(303); self.send_header("Location", base + "/"); self.end_headers()
+        elif action in ("/account_panel", "/account_gateway"):
+            kind = "panel" if action == "/account_panel" else "gateway"
+            nu, np1, np2 = val("user"), val("pass1"), val("pass2")
+            err = None
+            if not nu or len(nu) > 32 or ":" in nu or any(c.isspace() for c in nu):
+                err = "用户名不合法：需 1–32 个字符，不能含空格或冒号。"
+            elif len(np1) < 8 or len(np1) > 64:
+                err = "密码长度需为 8–64 个字符。"
+            elif np1 != np2:
+                err = "两次输入的密码不一致。"
+            if err:
+                self._send(self._page("<div class=wrap><div class='card err'>%s</div><p><a href='%s/'>← 返回面板</a></p></div>" % (esc(err), base)))
+            else:
+                cfg[kind + "_user"] = nu; cfg[kind + "_pass"] = np1
+                save_json(p("config.json"), cfg)
+                try: os.chmod(p("config.json"), 0o600)
+                except Exception: pass
+                add_event("已修改%s凭据（用户 %s）" % ("面板" if kind == "panel" else "网关", nu))
+                tip = ("下次打开面板时，请用新账号密码登录。"
+                       if kind == "panel" else
+                       "新连接即刻使用新凭据；请同步更新所有指向本网关的客户端 / 核心配置（如 Xray 出站），否则它们将连不上。已建立的连接不受影响。")
+                self._send(self._page("<div class=wrap><div class=card><h2>✓ 已修改</h2><p>%s</p><p><a href='%s/'>← 返回面板</a></p></div></div>" % (tip, base)))
         else:
             self._send("<h1>404</h1>", 404)
 
