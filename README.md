@@ -91,6 +91,16 @@ sudo bash extras/xray/install-xray.sh
 
 **域名路线（可选）**：已有域名、想要传统 VMess + WS + TLS 形态（作者现网用的就是这条）的，看 `extras/domain/`：一键脚本自动签 Let's Encrypt 证书并装好续期，附订阅分发示例。与 Reality 路线二选一，细节见该目录的 README。
 
+**菜单式一键部署**：不想记脚本路径的，直接跑总入口，选序号即可（也支持 `MODE=` 环境变量非交互运行）：
+
+```bash
+sudo bash deploy.sh
+# 1) Reality 路线        免域名免证书
+# 2) 域名 + HTTP 验证    acme 签证书，需放行 80
+# 3) 域名 + CF DNS 验证  Cloudflare API Token 签证书，不用开 80，自动续期
+# 4) 自签证书路线        零域名零等待，客户端需开启「允许不安全连接」
+```
+
 ## 与其它代理核心对接
 
 网关就是一个标准的账密 SOCKS5 出口。任何代理核心（Xray、sing-box 等）把出站指过来，即可获得家宽出口：
