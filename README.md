@@ -1,0 +1,136 @@
+# gatecore
+
+基于 [VPN Gate](https://www.vpngate.net/) 公开节点的**家宽出口核心**：自动拉取节点列表、区分家宽/机房、按质量排序，经 OpenVPN 建立隧道，再以本地 SOCKS5 / HTTP 网关把流量灌出去——出口 IP 就是志愿者家里的宽带 IP。
+
+**纯 Python 标准库、零第三方依赖、单文件实现、全源码可审计。**
+
+同类工具的核心多以闭源二进制分发，行为不可审计。gatecore 是为「可审计」而写的开源替代：不到一千行 Python，任何人都可以逐行检查它做了什么、没做什么。
+
+## 工作原理
+
+```
+你的设备 / 其它代理核心
+        │  SOCKS5 / HTTP（账密认证）
+        ▼
+  gatecore 网关 ──绑定──► tun 设备 geotun0 ──► OpenVPN 隧道 ──► VPN Gate 志愿节点 ──► 互联网
+        ▲                                                              （家宽出口）
+  Web 面板（仅回环 + 秘密路径 + Basic 认证）：选国家、看归属、一键切换
+```
+
+- **节点供给**：从 VPN Gate 公开 API 拉取节点列表并缓存，定时刷新。
+- **家宽分类**：多信号判定（主机名/运营者字段 + ISP/组织关键词），把真正的住宅节点与项目方/机房节点分开，面板有徽标与「只看家宽」筛选。
+- **排序**：综合 API 评分、速度、历史连接成功率、经隧道实测时延（EWMA 平滑）、UDP 加成；连接前有并发预探测，死节点直接跳过、不计惩罚。
+- **网关**：SOCKS5（含 UDP ASSOCIATE）+ HTTP 混合网关，出站 socket 绑定 tun 设备，物理上不可能绕过隧道；DNS 只走隧道内解析器，失败即报错、绝不回退系统解析（fail-closed）。
+- **面板**：状态总览、国家筛选、节点归属与 ISP、一键切换/断开、四种运行模式（手动 / 自动 / 固定国家 / 固定 IP）。
+- **守候**：盯住指定国家，一旦有新的家宽节点出现就记录并通知——**只通知，绝不自动连接**。
+- **健康循环**：每 30 秒经网关实测出口；自动类模式下节点死亡自动切换，手动模式只记录、等面板操作。
+
+## 快速开始
+
+要求：Linux（需要 `/dev/net/tun`）、Python 3.9+、OpenVPN、以 root 运行（创建 tun 设备所需）。
+
+```bash
+git clone https://github.com/Geokkk/gatecore.git
+cd gatecore
+sudo python3 gatecore.py serve
+```
+
+首次运行自动生成 `config.json`（权限 0600）：网关/面板的账号密码与面板秘密路径均为随机生成，请从该文件读取。启动日志会打印面板地址，默认仅监听回环：
+
+- 网关：`127.0.0.1:18500`（SOCKS5 + HTTP，账密认证）
+- 面板：`127.0.0.1:18787/<秘密路径>/`
+
+端口可用环境变量覆盖：`GATECORE_PORT`、`GATECORE_PANEL_PORT`、`GATECORE_PANEL_BIND`。
+
+systemd 托管示例：
+
+```ini
+[Unit]
+Description=gatecore residential egress core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/gatecore
+ExecStart=/usr/bin/python3 /opt/gatecore/gatecore.py serve
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动时会对账：若状态文件残留着「已连接」但 tun 设备不存在（例如机器重启过），会清除残留状态，面板如实显示未连接。
+
+一键安装（自动装依赖、部署到 `/opt/gatecore`、装 systemd 服务、打印凭据）：
+
+```bash
+sudo bash install.sh
+```
+
+## 三步跑通完整链路（小白路线）
+
+gatecore 本身只是**出口**核心。要让手机/电脑真正用上，还需要一个**入口**。仓库在 `extras/xray/` 附了一套官方 Xray 的对接模板与一键脚本，核心保持纯粹、入口按需拼装：
+
+```bash
+# 第 1 步: 装出口核心 (见上文一键安装), 然后在面板里连上一个国家的节点
+sudo bash install.sh
+
+# 第 2 步: 装入口 (官方 Xray, VLESS + Reality, 免域名免证书, 出站自动指向 gatecore)
+sudo bash extras/xray/install-xray.sh
+
+# 第 3 步: 脚本最后会打印一条 vless:// 链接, 导入客户端 (v2rayNG / Streisand / Shadowrocket 等) 即可
+```
+
+链路：`客户端 → Xray(443, Reality) → gatecore 网关 → OpenVPN 隧道 → 家宽出口`。
+
+说明：安装脚本会从 GitHub 下载官方 Xray（版本锁定在与作者现网一致的 v26.3.27），并对照官方 `.dgst` 校验 sha256 后才安装；UUID、Reality 密钥均为本机随机生成。云厂商安全组记得放行 443/TCP。模板只有 Reality 入站；需要 VMess + 域名证书路线的，请自行按「与其它代理核心对接」一节把任意 Xray/sing-box 入站的出站指过来，原理相同。
+
+## 与其它代理核心对接
+
+网关就是一个标准的账密 SOCKS5 出口。任何代理核心（Xray、sing-box 等）把出站指过来，即可获得家宽出口：
+
+```json
+{ "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 18500,
+  "users": [{ "user": "<gateway_user>", "pass": "<gateway_pass>" }] }] } }
+```
+
+## 命令行
+
+```bash
+python3 gatecore.py fetch      # 刷新节点列表
+python3 gatecore.py sync       # 重新做家宽分类
+python3 gatecore.py list [CC]  # 看排序后的候选
+python3 gatecore.py connect JP # 连指定国家（家宽优先）
+python3 gatecore.py disconnect
+python3 gatecore.py check      # 经网关实测当前出口
+python3 gatecore.py watch      # 守候状态
+python3 test_udp.py            # 自检：UDP 出口与 TCP 出口是否一致
+```
+
+## 安全说明
+
+- 默认只绑回环；如需对外暴露面板，请自行置于反向代理与 TLS 之后。
+- 所有凭据随机生成、只存本机 `config.json`（0600），不经任何网络传输。
+- DNS 失败关闭：隧道解析不通就报错，不会偷偷用系统 DNS。
+- 本程序需要 root 仅因创建 tun 设备与拉起 OpenVPN；除 VPN Gate 公开 API 与所选节点的 OpenVPN 端点外，不连接任何其它外部服务，无遥测。
+
+## 已知限制
+
+- 不支持 IPv6（失败关闭，不泄漏）。
+- VPN Gate 的节点名单本身是公开的，出口 IP 可能被识别为代理——这是这类供给的固有属性，任何基于 VPN Gate 的方案都一样。
+- 家宽节点是志愿者家里的设备，说下线就下线；可用性靠预探测 + 健康检查 + 故障切换兜底。
+- 本项目是**出口**核心，本体不含入站协议；仓库 `extras/xray/` 附有官方 Xray 入站模板与一键脚本（见「三步跑通完整链路」），也可自行用任意 Xray / sing-box 入站指向本网关。
+
+## License
+
+MIT
+
+---
+
+## English summary
+
+gatecore is a single-file, zero-dependency, fully auditable residential-egress core built on the public [VPN Gate](https://www.vpngate.net/) relay network. It fetches and classifies relay nodes (residential vs datacenter, multi-signal), ranks them by connection history and measured through-tunnel latency, brings up an OpenVPN tunnel, and exposes an authenticated SOCKS5 (TCP + UDP) / HTTP gateway bound to the tunnel device with fail-closed DNS. A loopback web panel (secret path + Basic auth) offers country filtering, one-click switching, four run modes, and a notify-only country watch that never auto-connects. Written as an open-source alternative to closed-binary cores of the same kind. MIT licensed.

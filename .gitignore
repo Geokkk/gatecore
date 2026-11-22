@@ -1,0 +1,14 @@
+# 运行期文件：含凭据与状态，永不入库
+config.json
+state.json
+nodes.json
+residential.json
+isp.json
+history.json
+watch_state.json
+current.ovpn
+openvpn.log
+openvpn.pid
+serve.log
+__pycache__/
+*.pyc
