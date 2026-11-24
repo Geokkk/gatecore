@@ -32,6 +32,9 @@ if [ ! -f /opt/gatecore/config.json ]; then
   bash "$HERE/install.sh"
 fi
 
+# 快捷命令 gk: 每次跑部署都刷新到最新版 (SSH 登录后输入 gk 打开交互面板)
+install -m 0755 "$HERE/gk.sh" /usr/local/bin/gk 2>/dev/null || true
+
 run_route() {
   case "$1" in
     reality)

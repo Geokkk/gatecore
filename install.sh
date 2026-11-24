@@ -51,6 +51,10 @@ systemctl daemon-reload
 systemctl enable gatecore.service >/dev/null 2>&1 || true
 systemctl restart gatecore.service
 
+# 3b) 快捷命令 gk (SSH 登录后输入 gk 打开交互面板)
+install -m 0755 "$HERE/gk.sh" /usr/local/bin/gk
+echo "快捷命令已安装: SSH 登录后输入 gk 即可打开交互面板"
+
 # 4) 等首次运行生成 config.json 并打印凭据
 for _ in $(seq 1 20); do
   [ -f "$INSTALL_DIR/config.json" ] && break
