@@ -97,12 +97,13 @@ sudo bash extras/xray/install-xray.sh
 sudo bash deploy.sh
 # 向导第 1 步选入口: 1) Reality  2) 域名+HTTP验证  3) 域名+CF DNS验证  4) 自签证书
 # 向导第 2 步: 加装 Argo 备用入口? [回车=加装]
-# 向导第 3 步: 把管理面板挂到域名?   [回车=挂, 最后打印 https 面板网址]
+# 向导第 3 步: 准备域名证书 (入口已自带则自动复用, 否则选 HTTP/CF/自签新签)
+# 向导第 4 步: 把管理面板挂到域名?   [回车=挂, 最后打印 https 面板网址]
 ```
 
 **Argo 备用入口（可选加装）**：任一路线跑通后，用向导第 2 步（或 `extras/argo/install-argo.sh`，或 `MODE=argo`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，填一次域名、其余回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
 
-**面板挂域名（可选加装）**：面板默认只听回环（SSH 隧道打开）。用向导第 3 步（或 `extras/panel/install-panel.sh`）可把它经 nginx 反代挂到域名上：能复用域名路线的证书就复用，否则自动新签，最后打印 `https://域名:8443/<秘密路径>/` 面板网址与账号密码。
+**面板挂域名（可选加装）**：面板默认只听回环（SSH 隧道打开）。用向导第 3–4 步（或 `extras/panel/install-panel.sh`）可先备好域名证书、再把它经 nginx 反代挂到域名上：能复用域名路线的证书就复用（域名自动从证书里读出，回车即可），否则按所选方式新签，最后打印 `https://域名:8443/<秘密路径>/` 面板网址与账号密码。
 
 **作者现网的完整形态**（前门分流、Argo 落点、证书/订阅、Xray 升级纪律）总结在 [`docs/FULL-CHAIN.md`](docs/FULL-CHAIN.md)，一键路线是它的简化版。
 

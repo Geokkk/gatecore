@@ -39,6 +39,10 @@ $(python3 -c "import json;c=json.load(open('$GATECORE_CONF'));print(c.get('panel
 EOF
 
 # ---------- 域名 ----------
+# 没给域名时, 先从入口路线现成证书里读出它的域名作默认值, 回车即可
+if [ -z "$PANEL_DOMAIN" ] && [ -z "${DOMAIN:-}" ] && [ -f "$XRAY_TLS_DIR/fullchain.pem" ]; then
+  DOMAIN="$(openssl x509 -in "$XRAY_TLS_DIR/fullchain.pem" -noout -ext subjectAltName 2>/dev/null | grep -oE 'DNS:[^, ]+' | head -1 | cut -d: -f2 || true)"
+fi
 if [ -z "$PANEL_DOMAIN" ]; then
   if [ -n "${DOMAIN:-}" ]; then
     read -rp "输入面板域名 [回车用入口域名 $DOMAIN]: " PANEL_DOMAIN || true
@@ -77,6 +81,13 @@ if [ "$CERT_MODE" = "auto" ] || [ "$CERT_MODE" = "reuse" ]; then
   elif [ "$CERT_MODE" = "reuse" ]; then
     echo "现有证书不覆盖 $PANEL_DOMAIN, 且 CERT_MODE=reuse, 已中止。" >&2
     exit 1
+  elif [ -t 0 ]; then
+    read -rp "现有证书不覆盖 $PANEL_DOMAIN, 选新证书方式 [1 HTTP验证(默认) / 2 CF DNS验证 / 3 自签]: " CM || true
+    case "$CM" in
+      2) CERT_MODE="cf" ;;
+      3) CERT_MODE="self" ;;
+      *) CERT_MODE="http" ;;
+    esac
   else
     CERT_MODE="http"
   fi
