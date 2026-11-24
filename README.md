@@ -91,18 +91,18 @@ sudo bash extras/xray/install-xray.sh
 
 **域名路线（可选）**：已有域名、想要传统 VMess + WS + TLS 形态（作者现网用的就是这条）的，看 `extras/domain/`：一键脚本自动签 Let's Encrypt 证书并装好续期，附订阅分发示例。与 Reality 路线二选一，细节见该目录的 README。
 
-**菜单式一键部署**：不想记脚本路径的，直接跑总入口，选序号即可（也支持 `MODE=` 环境变量非交互运行）：
+**一键部署向导（推荐）**：一条命令走完全流程——装本体 → 选入口 → 问是否加装 Argo → 问是否把面板挂到域名，每一步回车即确认默认，最后依次打印客户端链接与面板网址。也支持 `MODE=` 环境变量单步直达（`reality` / `domain-http` / `domain-cf` / `selfsigned` / `argo`）：
 
 ```bash
 sudo bash deploy.sh
-# 1) Reality 路线        免域名免证书
-# 2) 域名 + HTTP 验证    acme 签证书，需放行 80
-# 3) 域名 + CF DNS 验证  Cloudflare API Token 签证书，不用开 80，自动续期
-# 4) 自签证书路线        零域名零等待，客户端需开启「允许不安全连接」
-# 5) Argo 备用入口       加装：VLESS+WS 回环后端 + Cloudflare 隧道
+# 向导第 1 步选入口: 1) Reality  2) 域名+HTTP验证  3) 域名+CF DNS验证  4) 自签证书
+# 向导第 2 步: 加装 Argo 备用入口? [回车=加装]
+# 向导第 3 步: 把管理面板挂到域名?   [回车=挂, 最后打印 https 面板网址]
 ```
 
-**Argo 备用入口（可选加装）**：任一路线跑通后，用菜单 5（或 `extras/argo/install-argo.sh`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，填一次域名、其余回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
+**Argo 备用入口（可选加装）**：任一路线跑通后，用向导第 2 步（或 `extras/argo/install-argo.sh`，或 `MODE=argo`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，填一次域名、其余回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
+
+**面板挂域名（可选加装）**：面板默认只听回环（SSH 隧道打开）。用向导第 3 步（或 `extras/panel/install-panel.sh`）可把它经 nginx 反代挂到域名上：能复用域名路线的证书就复用，否则自动新签，最后打印 `https://域名:8443/<秘密路径>/` 面板网址与账号密码。
 
 **作者现网的完整形态**（前门分流、Argo 落点、证书/订阅、Xray 升级纪律）总结在 [`docs/FULL-CHAIN.md`](docs/FULL-CHAIN.md)，一键路线是它的简化版。
 
