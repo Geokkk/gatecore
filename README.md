@@ -6,6 +6,14 @@
 
 同类工具的核心多以闭源二进制分发，行为不可审计。gatecore 是为「可审计」而写的开源替代：不到一千行 Python，任何人都可以逐行检查它做了什么、没做什么。
 
+## 一行部署
+
+```bash
+git clone https://github.com/Geokkk/gatecore.git && cd gatecore && sudo bash deploy.sh
+```
+
+回车式向导四步走完（选入口 → Argo 备用入口 → 域名证书 → 面板挂域名），最后依次打印客户端链接与面板网址。装完 SSH 登录输入 `gk` 打开交互面板。细节见下方「快速开始」。
+
 ## 工作原理
 
 ```
