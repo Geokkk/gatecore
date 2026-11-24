@@ -87,7 +87,7 @@ sudo bash extras/xray/install-xray.sh
 
 链路：`客户端 → Xray(443, Reality) → gatecore 网关 → OpenVPN 隧道 → 家宽出口`。
 
-说明：安装脚本会从 GitHub 下载官方 Xray（版本锁定在与作者现网一致的 v26.3.27），并对照官方 `.dgst` 校验 sha256 后才安装；UUID、Reality 密钥均为本机随机生成。云厂商安全组记得放行 443/TCP。
+说明：安装脚本会从 GitHub 下载官方 Xray（版本锁定在与作者现网一致的 v26.11.9），并对照官方 `.dgst` 校验 sha256 后才安装；UUID、Reality 密钥均为本机随机生成。云厂商安全组记得放行 443/TCP。
 
 **域名路线（可选）**：已有域名、想要传统 VMess + WS + TLS 形态（作者现网用的就是这条）的，看 `extras/domain/`：一键脚本自动签 Let's Encrypt 证书并装好续期，附订阅分发示例。与 Reality 路线二选一，细节见该目录的 README。
 
@@ -99,7 +99,12 @@ sudo bash deploy.sh
 # 2) 域名 + HTTP 验证    acme 签证书，需放行 80
 # 3) 域名 + CF DNS 验证  Cloudflare API Token 签证书，不用开 80，自动续期
 # 4) 自签证书路线        零域名零等待，客户端需开启「允许不安全连接」
+# 5) Argo 备用入口       加装：VLESS+WS 回环后端 + Cloudflare 隧道
 ```
+
+**Argo 备用入口（可选加装）**：任一路线跑通后，用菜单 5（或 `extras/argo/install-argo.sh`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，脚本一路回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
+
+**作者现网的完整形态**（前门分流、Argo 落点、证书/订阅、Xray 升级纪律）总结在 [`docs/FULL-CHAIN.md`](docs/FULL-CHAIN.md)，一键路线是它的简化版。
 
 ## 与其它代理核心对接
 

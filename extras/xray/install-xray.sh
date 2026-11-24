@@ -5,7 +5,7 @@
 # 做五件事: 下载官方 Xray 并验 sha256 → 生成 UUID/Reality 密钥 → 写配置 → 装 systemd 服务 → 打印客户端链接
 set -euo pipefail
 
-XRAY_VERSION="v26.3.27"   # 故意锁定: 与作者现网验证过的版本一致; 升级前请看上游 release notes (VMess/Reality 变更)
+XRAY_VERSION="v26.11.9"   # 故意锁定: 与作者现网验证过的版本一致 (2026-11-24 升级并逐链复验); 升级前请看上游 release notes (VMess/WS/Reality 变更) 与 docs/FULL-CHAIN.md 的升级纪律
 XRAY_DIR=/opt/xray
 CONF_DIR=/usr/local/etc/xray
 GATECORE_CONF=/opt/gatecore/config.json

@@ -5,11 +5,14 @@
 #         sudo MODE=domain-http DOMAIN=proxy.example.com bash deploy.sh
 #         sudo MODE=domain-cf   DOMAIN=proxy.example.com CF_Token=<token> bash deploy.sh
 #         sudo MODE=selfsigned  DOMAIN=gatecore.local bash deploy.sh
+#         sudo MODE=argo        TUNNEL_DOMAIN=argo.example.com bash deploy.sh
 # 路线 (入口四选一, 核心都是同一个 gatecore):
 #   1 reality      VLESS+Reality, 免域名免证书
 #   2 domain-http  VMess+WS+TLS, 域名 + acme HTTP 验证 (需 80 端口)
 #   3 domain-cf    VMess+WS+TLS, 域名 + acme Cloudflare DNS 验证 (需 API Token, 不用开 80)
 #   4 selfsigned   VMess+WS+TLS, 自签证书 (零域名零等待, 客户端需开启"允许不安全")
+# 加装 (先装好任一入口路线后):
+#   5 argo         Argo 备用入口: VLESS+WS 回环后端 + Cloudflare 隧道 + 优选域名链接
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -36,6 +39,7 @@ if [ -z "$MODE" ]; then
   echo " 2) 域名 + HTTP 验证    VMess+WS+TLS, acme 签证书, 需放行 80"
   echo " 3) 域名 + CF DNS 验证  VMess+WS+TLS, Cloudflare Token 签证书, 不用开 80"
   echo " 4) 自签证书路线        VMess+WS+TLS, 零域名, 客户端需允许不安全连接"
+  echo " 5) Argo 备用入口       VLESS+WS + CF 隧道 (加装, 需先装好任一入口)"
   echo " 0) 退出"
   echo "================================================================"
   read -rp "输入序号 [1]: " CHOICE
@@ -45,12 +49,16 @@ if [ -z "$MODE" ]; then
     2) MODE=domain-http ;;
     3) MODE=domain-cf ;;
     4) MODE=selfsigned ;;
+    5) MODE=argo ;;
     0) echo "已退出。"; exit 0 ;;
     *) echo "无效序号: $CHOICE" >&2; exit 1 ;;
   esac
 fi
 
 case "$MODE" in
+  argo)
+    exec bash "$HERE/extras/argo/install-argo.sh"
+    ;;
   reality)
     exec bash "$HERE/extras/xray/install-xray.sh"
     ;;
@@ -70,7 +78,7 @@ case "$MODE" in
     exec bash "$HERE/extras/domain/install-domain.sh"
     ;;
   *)
-    echo "未知 MODE: $MODE (可选 reality | domain-http | domain-cf | selfsigned)" >&2
+    echo "未知 MODE: $MODE (可选 reality | domain-http | domain-cf | selfsigned | argo)" >&2
     exit 1
     ;;
 esac
