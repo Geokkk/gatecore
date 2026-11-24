@@ -65,10 +65,15 @@ def main():
     else:
         changed = False
 
+    clients = (inbound.get("settings") or {}).get("clients") or []
+    if not clients:
+        print("existing vless-ws-in inbound has no clients; fix or remove it first",
+              file=sys.stderr)
+        return 1
     state = {
-        "uuid": inbound["settings"]["clients"][0]["id"],
-        "port": inbound["port"],
-        "path": inbound["streamSettings"]["wsSettings"]["path"],
+        "uuid": clients[0]["id"],
+        "port": inbound.get("port", args.port),
+        "path": ((inbound.get("streamSettings") or {}).get("wsSettings") or {}).get("path", args.path),
         "domain": args.domain,
         "preferred": args.preferred,
         "changed": changed,

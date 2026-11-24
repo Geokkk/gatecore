@@ -42,7 +42,7 @@ if [ -z "$MODE" ]; then
   echo " 5) Argo 备用入口       VLESS+WS + CF 隧道 (加装, 需先装好任一入口)"
   echo " 0) 退出"
   echo "================================================================"
-  read -rp "输入序号 [1]: " CHOICE
+  read -rp "输入序号 [1]: " CHOICE || true
   CHOICE="${CHOICE:-1}"
   case "$CHOICE" in
     1) MODE=reality ;;

@@ -40,8 +40,7 @@
 
 前门是一个带 `fallbacks` 的 VLESS+TLS 入站，按 SNI/ALPN/路径分流：
 
-- 默认与 `alpn=h2`：回落到 nginx 伪装站，`xver: 1`（附带 PROXY 协议头，
-  伪装站能拿到真实来源 IP）。
+- 默认与 `alpn=h2`：回落到 nginx 伪装站，`xver: 1`（附带 PROXY 协议头）。
 - `path=/jaitvws`：回落 VMess 后端，`xver: 1`。**配对关系**：后端的
   `wsSettings` 必须带 `acceptProxyProtocol: true`，否则握手即断。
 - `path=/vlessws`：回落 VLESS 后端，`xver: 0`。**这里不能照抄上一条**：

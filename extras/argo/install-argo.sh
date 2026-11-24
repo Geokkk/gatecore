@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # gatecore Argo 备用入口加装: 回环 VLESS+WS 后端 + Cloudflare 隧道落点 + 优选域名链接
-# 用法 (交互, 一路回车即可):
+# 用法 (交互, 填一次域名、其余回车即可):
 #   sudo bash install-argo.sh
 # 非交互:
 #   sudo TUNNEL_DOMAIN=argo.example.com bash install-argo.sh
 #   sudo TUNNEL_DOMAIN=argo.example.com PREFERRED_DOMAIN=none bash install-argo.sh
 # 前置: 已装 gatecore 与任一 Xray 路线 (extras/xray 或 extras/domain), 即
-#   /opt/xray/xray 与 /usr/local/etc/xray/config.json 已存在。
+#   /opt/xray/xray、/usr/local/etc/xray/config.json 与 xray.service 单元已存在。
 # 本脚本只往现有配置里"加"一个只听回环的入站 (自动备份 + 冷测 + 失败回滚),
 # 不动已有入站/出站。隧道本身的绑定在 Cloudflare 侧完成, 脚本最后会打印确切步骤。
 set -euo pipefail
@@ -32,6 +32,10 @@ if [ ! -x "$XRAY_BIN" ] || [ ! -f "$CONF" ]; then
   echo "未找到 Xray 二进制或配置 —— 请先用 deploy.sh 装好任一入口路线 (Reality 或域名)。" >&2
   exit 1
 fi
+if ! systemctl cat xray.service >/dev/null 2>&1; then
+  echo "未找到 xray.service 服务单元 —— 请先跑 extras/xray/install-xray.sh 或 extras/domain/install-domain.sh 装好服务单元。" >&2
+  exit 1
+fi
 
 # ---------- 参数 (回车接受默认) ----------
 if [ -z "$TUNNEL_DOMAIN" ]; then
@@ -51,7 +55,14 @@ if [ "$PREFERRED_DOMAIN" = "none" ]; then PREFERRED_DOMAIN=""; fi
 BAK="$CONF.bak.$(date +%s)"
 cp "$CONF" "$BAK"
 echo ">> 已备份现有配置到 $BAK"
-python3 "$HERE/add-vless-ws.py" --config "$CONF" --state "$STATE" --domain "$TUNNEL_DOMAIN" --preferred "$PREFERRED_DOMAIN" --port "$ARGO_PORT" --path "$WS_PATH" >/dev/null
+if ! python3 "$HERE/add-vless-ws.py" --config "$CONF" --state "$STATE" --domain "$TUNNEL_DOMAIN" --preferred "$PREFERRED_DOMAIN" --port "$ARGO_PORT" --path "$WS_PATH" >/dev/null; then
+  echo "合并后端入站失败, 现有配置未被修改 (备份在 $BAK)。" >&2
+  exit 1
+fi
+# 以状态文件为准读回实际生效的端口/路径 (重复运行时后端可能已存在, 以既有值为准)
+read -r EFF_PORT EFF_PATH <<EOF
+$(python3 -c "import json;s=json.load(open('$STATE'));print(s['port'], s['path'])")
+EOF
 
 if ! "$XRAY_BIN" run -test -c "$CONF" >/dev/null 2>&1; then
   echo "新配置冷测未过, 已回滚。" >&2
@@ -67,10 +78,11 @@ if ! systemctl is-active --quiet xray.service; then
   journalctl -u xray --no-pager -n 10 >&2
   exit 1
 fi
-echo ">> VLESS+WS 后端已就绪: 127.0.0.1:$ARGO_PORT (路径 $WS_PATH)"
+echo ">> VLESS+WS 后端已就绪: 127.0.0.1:$EFF_PORT (路径 $EFF_PATH)"
 
 # ---------- 生成链接 ----------
-python3 - "$STATE" > /tmp/.argo-links.txt <<'PY'
+LINKS_TMP="$(mktemp)"
+python3 - "$STATE" > "$LINKS_TMP" <<'PY'
 import json, sys, urllib.parse
 s = json.load(open(sys.argv[1]))
 q = "encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s" % (
@@ -79,9 +91,9 @@ base = "vless://%s@%%s:443?%s" % (s["uuid"], q)
 print(base % s["domain"] + "#gatecore-argo")
 print((base % s["preferred"] + "#gatecore-argo-fast") if s.get("preferred") else "-")
 PY
-LINK="$(sed -n '1p' /tmp/.argo-links.txt)"
-LINK_FAST="$(sed -n '2p' /tmp/.argo-links.txt)"
-rm -f /tmp/.argo-links.txt
+LINK="$(sed -n '1p' "$LINKS_TMP")"
+LINK_FAST="$(sed -n '2p' "$LINKS_TMP")"
+rm -f "$LINKS_TMP"
 
 echo
 echo "================================================================"
@@ -91,12 +103,12 @@ echo " 【令牌隧道】在 Cloudflare Zero Trust 控制台操作:"
 echo "   网络 → 隧道 → 选你的隧道 → 公共主机名 → 添加:"
 echo "     子域/域名: $TUNNEL_DOMAIN"
 echo "     服务类型: HTTP"
-echo "     URL:       localhost:$ARGO_PORT"
+echo "     URL:       localhost:$EFF_PORT"
 echo "   (DNS 由 CF 自动创建, 保存后约一分钟生效)"
 echo
 echo " 【本地托管隧道】在 config.yml 的 ingress 里加一条后重启 cloudflared:"
 echo "   - hostname: $TUNNEL_DOMAIN"
-echo "     service: http://localhost:$ARGO_PORT"
+echo "     service: http://localhost:$EFF_PORT"
 echo "   并执行: cloudflared tunnel route dns <隧道名> $TUNNEL_DOMAIN"
 echo "================================================================"
 echo " 客户端链接 (原版, 绑定完成后导入测试):"
@@ -111,6 +123,6 @@ if [ "$LINK_FAST" != "-" ]; then
   echo " 注: 优选域名是第三方的、可能过期失效; 突然不通先切回原版链接。"
 fi
 echo "================================================================"
-echo " 链路: 客户端 → CF 边缘 → 隧道 → 127.0.0.1:$ARGO_PORT → gatecore → 家宽出口"
+echo " 链路: 客户端 → CF 边缘 → 隧道 → 127.0.0.1:$EFF_PORT → gatecore → 家宽出口"
 echo " 定位: 备用/防封入口, 不替代直连。状态文件: $STATE"
 echo "================================================================"

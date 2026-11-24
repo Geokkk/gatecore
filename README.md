@@ -102,7 +102,7 @@ sudo bash deploy.sh
 # 5) Argo 备用入口       加装：VLESS+WS 回环后端 + Cloudflare 隧道
 ```
 
-**Argo 备用入口（可选加装）**：任一路线跑通后，用菜单 5（或 `extras/argo/install-argo.sh`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，脚本一路回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
+**Argo 备用入口（可选加装）**：任一路线跑通后，用菜单 5（或 `extras/argo/install-argo.sh`）加一条经 Cloudflare 隧道的备用入口：回环 VLESS+WS 后端 + 隧道落点，填一次域名、其余回车即可，并生成原版与**优选域名**两条客户端链接。源站 IP 被封或变更时它不受影响；定位是备用，不替代直连。为什么乘客选 VLESS+WS 而不是 VMess（作者实测对比）见 `extras/argo/README.md`。
 
 **作者现网的完整形态**（前门分流、Argo 落点、证书/订阅、Xray 升级纪律）总结在 [`docs/FULL-CHAIN.md`](docs/FULL-CHAIN.md)，一键路线是它的简化版。
 
