@@ -87,9 +87,10 @@ import json, sys, urllib.parse
 s = json.load(open(sys.argv[1]))
 q = "encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s" % (
     s["domain"], s["domain"], urllib.parse.quote(s["path"], safe=""))
-base = "vless://%s@%%s:443?%s" % (s["uuid"], q)
-print(base % s["domain"] + "#gatecore-argo")
-print((base % s["preferred"] + "#gatecore-argo-fast") if s.get("preferred") else "-")
+def link(host):
+    return "vless://%s@%s:443?%s" % (s["uuid"], host, q)
+print(link(s["domain"]) + "#gatecore-argo")
+print((link(s["preferred"]) + "#gatecore-argo-fast") if s.get("preferred") else "-")
 PY
 LINK="$(sed -n '1p' "$LINKS_TMP")"
 LINK_FAST="$(sed -n '2p' "$LINKS_TMP")"
