@@ -47,13 +47,16 @@ show_links() {
   if [ -f "$ARGO_STATE" ]; then
     python3 - "$ARGO_STATE" <<'PY'
 import json, sys, urllib.parse
-st = json.load(open(sys.argv[1]))
-u = st["uuid"]; host = st["tunnel_domain"]; path = urllib.parse.quote(st["path"], safe="")
-def link(addr):
-    return ("vless://" + u + "@" + addr + ":443?encryption=none&security=tls"
-            "&sni=" + host + "&type=ws&host=" + host + "&path=" + path + "#gatecore-argo")
-print("Argo 链接 (原版):"); print(link(host)); print()
-print("Argo 链接 (优选域名版):"); print(link(st["preferred_domain"]))
+try:
+    st = json.load(open(sys.argv[1]))
+    u = st["uuid"]; host = st["domain"]; path = urllib.parse.quote(st["path"], safe="")
+    def link(addr):
+        return ("vless://" + u + "@" + addr + ":443?encryption=none&security=tls"
+                "&sni=" + host + "&type=ws&host=" + host + "&path=" + path + "#gatecore-argo")
+    print("Argo 链接 (原版):"); print(link(host)); print()
+    print("Argo 链接 (优选域名版):"); print(link(st["preferred"]))
+except Exception as e:
+    print("Argo 状态文件读取失败:", e)
 PY
     shown=1
   fi
