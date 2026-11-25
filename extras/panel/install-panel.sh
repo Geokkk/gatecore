@@ -96,7 +96,20 @@ fi
 if [ -z "$CERT_FILE" ]; then
   mkdir -p "$PANEL_TLS_DIR"
   CERT_FILE="$PANEL_TLS_DIR/fullchain.pem"; KEY_FILE="$PANEL_TLS_DIR/privkey.pem"
-  if [ "$CERT_MODE" = "self" ]; then
+  # 已有覆盖本域名且一周内不过期的证书 (如上次签发成功但后续步骤中断) → 跳过签发, 直接用
+  SKIP_ISSUE=0
+  if [ "$CERT_MODE" != "self" ] && [ -f "$CERT_FILE" ] && \
+     openssl x509 -in "$CERT_FILE" -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:$PANEL_DOMAIN" && \
+     openssl x509 -in "$CERT_FILE" -noout -checkend 604800 >/dev/null 2>&1; then
+    echo ">> $PANEL_DOMAIN 的证书已存在且有效, 跳过签发"
+    SKIP_ISSUE=1
+    CERT_NOTE="已存在的证书 (acme.sh 自动续期)"
+    ( crontab -l 2>/dev/null | grep -v 'acme.sh.*--cron' || true
+      echo '24 3 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null' ) | crontab -
+  fi
+  if [ "$SKIP_ISSUE" = "1" ]; then
+    :
+  elif [ "$CERT_MODE" = "self" ]; then
     echo ">> 生成自签证书 ($PANEL_DOMAIN, 10 年) ..."
     if printf '%s' "$PANEL_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then SAN="IP:$PANEL_DOMAIN"; else SAN="DNS:$PANEL_DOMAIN"; fi
     openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" \
@@ -132,7 +145,7 @@ if [ -z "$CERT_FILE" ]; then
     fi
     "$ACME" --install-cert -d "$PANEL_DOMAIN" \
       --fullchain-file "$CERT_FILE" --key-file "$KEY_FILE" \
-      --reloadcmd "systemctl reload nginx"
+      --reloadcmd "systemctl reload nginx || true"
     chmod 600 "$KEY_FILE"
     ( crontab -l 2>/dev/null | grep -v 'acme.sh.*--cron' || true
       echo '24 3 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null' ) | crontab -
