@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gatecore 新手部署教程 · 从零到完整链路</title>
+<style>
+  :root{--ink:#1f2937;--mut:#64748b;--line:#e2e8f0;--blue:#2563eb;--green:#059669;--orange:#ea580c;--purple:#7c3aed;--bg:#f8fafc;--card:#ffffff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.65}
+  .wrap{max-width:760px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:26px;margin:8px 0 4px}
+  .sub{color:var(--mut);font-size:14px;margin-bottom:20px}
+  .intro{background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 16px;font-size:15px;margin-bottom:24px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px;margin-bottom:18px}
+  .step h2{font-size:19px;margin:0 0 4px}
+  .step h2 .no{display:inline-block;color:#fff;border-radius:8px;padding:0 9px;margin-right:8px;font-size:16px}
+  .s0 .no{background:var(--mut)} .s1 .no{background:#dc2626} .s2 .no{background:var(--orange)}
+  .s3 .no{background:var(--orange)} .s4 .no{background:var(--blue)} .s5 .no{background:var(--green)}
+  .s6 .no{background:var(--green)} .s7 .no{background:var(--purple)} .s8 .no{background:var(--ink)}
+  .why{color:var(--mut);font-size:14px;margin:0 0 10px}
+  ul,ol{margin:6px 0 12px;padding-left:22px}
+  li{margin:4px 0}
+  code{background:#f1f5f9;border:1px solid var(--line);border-radius:5px;padding:0 5px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:13.5px;line-height:1.55}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  .tip{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 14px;font-size:14px;margin:10px 0 14px}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;font-size:14px;margin:10px 0 14px}
+  .save{background:#fdf4ff;border:1px solid #f0abfc;border-radius:10px;padding:10px 14px;font-size:14px;margin:10px 0 14px}
+  table{border-collapse:collapse;width:100%;margin:8px 0 14px;font-size:14.5px}
+  td,th{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{background:#f8fafc}
+  .check{list-style:none;padding-left:2px}
+  .check li{margin:7px 0}
+  .foot{color:var(--mut);font-size:13px;text-align:center;margin-top:28px}
+  b.k{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>gatecore 新手部署教程</h1>
+<p class="sub">从一台空服务器开始，一步一步装出完整形态：Reality 直连入口 + Argo 备用入口 + 域名面板 + 家宽出口。全程约 20 分钟。</p>
+
+<div class="intro">
+<b>先说清这套东西是什么。</b>它由三段组成：<b>入口</b>（Xray，负责让你的手机连进来）、<b>出口核心</b>（gatecore，负责选家宽节点、建 OpenVPN 隧道）、<b>家宽节点</b>（VPN Gate 志愿者家里的宽带，你的最终出口 IP 就是它）。链路长这样：<br>
+手机 → 入口 → gatecore 网关 → OpenVPN 隧道 → 家宽节点 → 互联网。<br>
+下面的步骤就是把这三段依次接起来。文中 <code>example.com</code> 是占位示例，操作时换成你自己的域名。
+</div>
+
+<div class="step s0">
+<h2><span class="no">0</span>准备清单</h2>
+<p class="why">先把这四样备齐，后面每一步都顺。</p>
+<ul>
+<li><b>一台云服务器</b>：Ubuntu 22.04，能用 root 或 sudo 登录（免费小机型就够）。</li>
+<li><b>一个域名</b>，且 DNS 已托管到 <b>Cloudflare</b>（Argo 备用入口和面板要用它）。解析分两处：Argo 子域名的解析由隧道自动生成，不用你手动加；<b>面板子域名要你自己加一条 A 记录</b>，指到服务器 IP、选灰云（仅 DNS）——证书签发不需要它，但面板网址能不能打开靠它，第 4 步装面板之前先加好。</li>
+<li><b>一个 Cloudflare 账号</b>（就是上面那个域名的账号）。</li>
+<li><b>手机客户端</b>：Android 用 v2rayNG；iPhone 用 Streisand 或 Shadowrocket。</li>
+<li><b>一个 SSH 客户端</b>：电脑上能连服务器终端就行（Windows 可用 Netcatty、PuTTY 等）。</li>
+</ul>
+</div>
+
+<div class="step s1">
+<h2><span class="no">1</span>先放行防火墙（装之前做）</h2>
+<p class="why">端口不通，后面装得再对也连不上。这一步在部署之前先做完。</p>
+<ol>
+<li><b>云厂商控制台</b>里找到这台服务器的安全组 / 防火墙，放行 TCP 端口：<code>443</code>（入口）、<code>8443</code>（面板）。如果你的云安全组默认全放行，这条可跳过。</li>
+<li>如果服务器<b>本机</b> iptables 末尾有一条 REJECT 规则（不少免费机的默认镜像有），在 SSH 里执行下面三条，把放行插到 REJECT 前面：</li>
+</ol>
+<pre><code>sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 8443 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT</code></pre>
+<p>（80 是给证书签发留的通道，一并放行最省事。22 是 SSH 端口，你能连上就说明它本来就是通的，不用动。）</p>
+<p class="note">💡 这三条只保存在内存里，<b>服务器重启后会丢</b>：装一次持久化工具保存下来（<code>sudo apt-get install -y iptables-persistent</code>，安装时选 Yes 保存当前规则），或每次重启后按上面命令复查一遍。</p>
+</div>
+
+<div class="step s2">
+<h2><span class="no">2</span>建一个 Cloudflare API 令牌</h2>
+<p class="why">第 4 步给面板签 https 证书时要用。提前建好，到时候直接粘贴。</p>
+<ol>
+<li>登录 Cloudflare 控制台，点右上角头像 → <b>我的个人资料</b> → <b>API 令牌</b> → <b>创建令牌</b> → 选<b>创建自定义令牌</b>。</li>
+<li>权限加<b>两条</b>：
+<table>
+<tr><th>类别</th><th>项目</th><th>级别</th></tr>
+<tr><td>区域</td><td>DNS</td><td>编辑</td></tr>
+<tr><td>区域</td><td>区域</td><td>读取</td></tr>
+</table>
+</li>
+<li>「区域资源」选<b>你的那个域名</b>，然后创建。</li>
+<li>把生成的令牌<b>复制保存</b>到一个顺手的地方（它只完整显示这一次）。</li>
+</ol>
+</div>
+
+<div class="step s3">
+<h2><span class="no">3</span>在 Cloudflare 建一条隧道</h2>
+<p class="why">Argo 备用入口要借这条隧道进来。这一步先把隧道建好并连上服务器。</p>
+<ol>
+<li>进入 Cloudflare <b>Zero Trust</b> 控制台 → <b>网络</b> → <b>隧道</b> → <b>创建隧道</b>，类型选 <b>Cloudflared</b>，给它起个名字（任意）。</li>
+<li>它会显示一条安装命令（形如 <code>cloudflared service install xxxx</code> 或带 token 的运行命令）。把这条命令<b>复制到服务器的 SSH 里执行</b>。</li>
+<li>回到隧道页面，状态变成<b>健康 / 已连接</b>，这一步就完成了。公共主机名先不用加，第 4 步装到 Argo 时再回来加一条。</li>
+</ol>
+</div>
+
+<div class="step s4">
+<h2><span class="no">4</span>一行部署，跟着向导走四步</h2>
+<p class="why">SSH 登录服务器，执行这一条命令，之后全部是向导问答：回车 = 接受默认。</p>
+<pre><code>git clone https://github.com/Geokkk/gatecore.git &amp;&amp; cd gatecore &amp;&amp; sudo bash deploy.sh</code></pre>
+<ol>
+<li><b>先装本体</b>：向导会自动先装好 gatecore 核心，并打印网关和面板的<b>账号、密码</b>。</li>
+</ol>
+<div class="save">📌 <b>把这屏打印的账号密码截图保存。</b>忘了也没关系：装完后在服务器输 <code>gk</code> 选 <code>9</code>，随时能再看面板地址和密码。</div>
+<ol start="2">
+<li><b>选入口</b>：出现四个选项时输 <code>1</code>（Reality 路线，免域名免证书；直接回车也是 1）。装完会打印一条 <code>vless://</code> 开头的链接——这是<b>手机直连链接，先复制保存</b>。Reality 的伪装域名（SNI）脚本已自动配好、用的是大站域名，<b>保持默认，不要改成你自己的域名</b>。</li>
+<li><b>加装 Argo 备用入口</b>：问「加装 Argo?」时<b>直接回车</b>。它让你输入 Argo 域名，填一个子域名，例如 <code>argo.example.com</code>（换成你自己的域名）；再问「优选域名」时<b>直接回车</b>用默认（<code>cf.090227.xyz</code>，第三方的、可能过期失效；不通时切回原版链接）。后端装好后，按屏幕上的提示回到第 3 步那条隧道的页面：<b>公共主机名 → 添加</b>：子域填 <code>argo</code>、域名选你的域名、服务类型选 <b>HTTP</b>、URL 填 <code>localhost:31301</code>，保存。约一分钟生效。脚本最后打印<b>两条 Argo 链接</b>（原版和优选版），都复制保存。</li>
+<li><b>准备域名证书</b>：问「准备域名证书?」时<b>直接回车</b>；再问证书方式时选 <code>2</code>（CF DNS 验证，不用开 80 端口验证，最省事）。</li>
+<li><b>面板挂域名</b>：问「把面板挂到域名?」时<b>直接回车</b>。输入面板域名，例如 <code>panel.example.com</code>（换成你自己的）；它让你粘贴 Cloudflare 令牌时，把第 2 步建的令牌粘进去（<b>粘贴时屏幕不显示字符，是正常的</b>，粘完回车）。装完会打印<b>面板网址</b>（形如 <code>https://panel.example.com:8443/一串随机字符/</code>）和账号密码，一并保存。</li>
+</ol>
+<div class="tip">✅ 向导四步走完，服务器这一侧就齐了。接下来先去连节点，再回手机导入链接——顺序别反：<b>没连节点之前，手机链接测不通是正常的</b>，因为链路最后一段还没接上。</div>
+</div>
+
+<div class="step s5">
+<h2><span class="no">5</span>连上一个家宽节点</h2>
+<p class="why">这一步把链路最后一段接上。</p>
+<ol>
+<li>SSH 登录服务器，输入 <code>gk</code> 回车，打开交互面板。</li>
+<li>选 <code>4</code>（连接节点），国家代码<b>直接回车</b>（默认 JP 日本）。它会先探测一批候选节点，再自动连上最合适的一个。</li>
+<li>看到状态行显示<b>当前出口 IP</b>（和国家代码），就是连上了。</li>
+<li>想再确认一次：选 <code>6</code>（出口自检），返回的 IP 与国家和所选节点一致即可。</li>
+</ol>
+<div class="note">💡 以后日常操作都在 <code>gk</code> 里：换节点选 4，看客户端链接选 8，看面板地址选 9，重启服务选 10，升级/卸载选 11。不用记任何命令。</div>
+</div>
+
+<div class="step s6">
+<h2><span class="no">6</span>手机导入链接</h2>
+<ol>
+<li>复制第 4 步保存的 <b>Reality 链接</b>，打开 v2rayNG，点右上角 <code>+</code> → <b>从剪贴板导入</b>。</li>
+<li>点中刚导入的这条配置（让它成为当前选中），然后点右下角的<b>真连接测试</b>（或在配置上长按测速）。<b>显示一个毫秒数字 = 通了。</b></li>
+<li>把两条 <b>Argo 链接</b>也用同样方法导入，留作备用；各测一次真连接，能显示延迟即可。</li>
+<li>判读规则就一条：显示 <code>-1</code> 时，先回服务器 <code>gk</code> 选 <code>1</code> 看是不是<b>还没连上节点</b>；已经连着的话，实际打开浏览器上网试，以真实使用为准。</li>
+</ol>
+</div>
+
+<div class="step s7">
+<h2><span class="no">7</span>打开面板，选个运行模式</h2>
+<ol>
+<li>浏览器打开第 4 步打印的<b>面板网址</b>，用打印的账号密码登录。</li>
+<li>面板里能看当前出口、按国家浏览节点、点一下就切换。下面是四种<b>运行模式</b>，选一个保存：</li>
+</ol>
+<table>
+<tr><th>模式</th><th>行为</th><th>适合</th></tr>
+<tr><td>手动</td><td>只用你选的节点；它断了不会自动切，等你自己在面板或 gk 里重连</td><td>想自己掌控</td></tr>
+<tr><td>自动</td><td>程序按质量自动选节点、自动切换</td><td><b>新手推荐，省心</b></td></tr>
+<tr><td>固定国家</td><td>只在你指定的国家里自动选</td><td>需要固定地区</td></tr>
+<tr><td>固定 IP</td><td>只认当前这一个节点；它下线就暂时断网，它恢复后自动回来</td><td>需要固定出口 IP</td></tr>
+</table>
+</div>
+
+<div class="step s8">
+<h2><span class="no">8</span>验收清单</h2>
+<p class="why">五项全勾，完整部署就完成了。</p>
+<ul class="check">
+<li>□ <code>gk</code> 选 <code>1</code>：状态显示<b>已连接</b>，有当前出口 IP</li>
+<li>□ <code>gk</code> 选 <code>6</code>：出口自检的 IP / 国家与所选节点一致</li>
+<li>□ 手机 <b>Reality</b> 链接：真连接测试显示延迟数字</li>
+<li>□ 手机 <b>Argo</b> 链接：真连接测试显示延迟数字</li>
+<li>□ 浏览器能打开<b>面板网址</b>并成功登录</li>
+</ul>
+</div>
+
+<p class="foot">gatecore · 开源地址 github.com/Geokkk/gatecore（MIT）<br>装好之后，服务器上的一切日常操作只需要一个命令：<b>gk</b></p>
+
+</div>
+</body>
+</html>
