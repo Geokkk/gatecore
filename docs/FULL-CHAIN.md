@@ -51,6 +51,12 @@
 后端都不带 TLS：TLS 在前门终结（直连时）或在 Cloudflare 边缘终结
 （Argo 时），回环这一段是明文 WS——它不出本机。
 
+- **Reality 的 SNI/dest 只用大站域名**（仓库模板默认 `www.microsoft.com`）：
+  不要换成自己托管在 Cloudflare 的域名。CF 的 443 系端口
+  （443 / 2053 / 2083 / 2087 / 2096 / 8443）会被定点扫描，SNI 一旦是
+  CF 域名，带着它来敲门的探针就能确认这是 Reality 并定位源站；
+  用大站域名时，探针拿到的只是真站点的透传回应。
+
 ## 出口契约（gatecore）
 
 - Xray 的出站 SOCKS5 凭据必须与 gatecore `config.json` 里的网关凭据

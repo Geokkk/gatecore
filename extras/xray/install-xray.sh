@@ -52,6 +52,9 @@ read -r GW_PORT GW_USER GW_PASS <<EOF
 $(python3 -c "import json;c=json.load(open('$GATECORE_CONF'));print(c['gateway_port'], c['gateway_user'], c['gateway_pass'])")
 EOF
 
+# 注意: 配置模板里的 Reality dest/SNI 固定用大站域名 (www.microsoft.com), 不要改成
+# 自己托管在 Cloudflare 的域名——CF 的 443 系端口会被定点扫描, SNI 用 CF 域名等于
+# 把源站位置报给扫描者 (原理见 docs/FULL-CHAIN.md「前门分流设计」)。
 # 3) 写配置 (先备份旧配置)
 mkdir -p "$CONF_DIR"
 [ -f "$CONF_DIR/config.json" ] && cp "$CONF_DIR/config.json" "$CONF_DIR/config.json.bak.$(date +%s)"
