@@ -80,7 +80,8 @@ def get_config():
 def get_state():
     return load_json(p("state.json"), {"mode": "manual", "cc": "", "current": None,
                                        "fail_count": 0, "events": [],
-                                       "watch": [], "watch_interval": 900, "watch_hits": []})
+                                       "watch": [], "watch_interval": 900, "watch_hits": [],
+                                       "favorites": [], "fav_status": {}})
 def set_state(st): save_json(p("state.json"), st)
 
 def add_event(msg):
@@ -680,22 +681,42 @@ def connect_node(cfg, target, cc_hint=""):
     with TUNNEL.lock:
         nodes = enrich(fetch_nodes())
         hist = get_history()
+        favs = [ip for ip in get_state().get("favorites", []) if ip]
+        favset = set(favs)
         if target is not None:
             cands = [target]
         else:
+            # 收藏优先（冷备队列）：收藏按名单顺序排在全局候选之前；带国家提示时
+            # 本国收藏最先、全局本国候选其次、他国收藏垫底，全灭才轮到全局——不断网优先。
+            by_ip = {n["ip"]: n for n in nodes}
+            fav_nodes = [by_ip[ip] for ip in favs if ip in by_ip]
+            if cc_hint:
+                fav_in = [n for n in fav_nodes if n["cc"] == cc_hint]
+                fav_out = [n for n in fav_nodes if n["cc"] != cc_hint]
+            else:
+                fav_in, fav_out = fav_nodes, []
             ranked = rank(nodes, cc_hint or None)
-            res = [n for n in ranked if n.get("residential") is True]
-            oth = [n for n in ranked if n.get("residential") is not True]
-            pool = (res[:8] + oth[:3]) if res else ranked[:8]
+            res = [n for n in ranked if n.get("residential") is True and n["ip"] not in favset]
+            oth = [n for n in ranked if n.get("residential") is not True and n["ip"] not in favset]
+            pool = (res[:8] + oth[:3]) if res else [n for n in ranked if n["ip"] not in favset][:8]
+            pool = fav_in + pool + fav_out
             resp, unk = _preprobe(pool)
+            resp_keys = {node_key(n) for n, _m in resp}
+            unk_keys = {node_key(n) for n in unk}
             def _trial_key(nm):
                 n, pms = nm
                 bonus = max(-20.0, min(20.0, (100.0 - pms) * 0.2)) if pms else 0.0
                 return -(rank_score(n, get_history()) + bonus)
-            resp.sort(key=_trial_key)  # 探测时延只在本轮顺序里起 ±20 的微调作用
-            cands = ([n for n, _m in resp] + unk)[:6]
+            g_resp = sorted(((n, m) for n, m in resp if n["ip"] not in favset), key=_trial_key)
+            fav_trials = [n for n in (fav_in + fav_out)
+                          if node_key(n) in resp_keys or node_key(n) in unk_keys]
+            cands = (fav_trials + [n for n, _m in g_resp]
+                     + [n for n in unk if n["ip"] not in favset])[:8]
             add_event("预探测：%d 个候选中 %d 个有响应、%d 个待试、%d 个无响应跳过"
                       % (len(pool), len(resp), len(unk), len(pool) - len(resp) - len(unk)))
+            if favs:
+                add_event("冷备队列：收藏 %d 个（池中 %d），本轮 %d 个进入候选"
+                          % (len(favs), len(fav_nodes), len(fav_trials)))
             if not cands: cands = pool[:3]  # 探测全灭时兜底硬试前三名
         if not cands:
             add_event("无可用候选（国家 %s）" % (cc_hint or "全部")); return False
@@ -724,6 +745,8 @@ def connect_node(cfg, target, cc_hint=""):
                 t_d = time.time(); dip = dns_query_a("example.com"); dms = int((time.time() - t_d) * 1000)
                 if dip and 0 < dms < 5000: hist_latency(node_key(n), dms)
             except Exception: pass
+            if target is None and favset and n["ip"] not in favset:
+                add_event("收藏节点均不可用，已回落全局排行")
             add_event("✓ 已连接 %s，出口 %s (%s, %s)" % (n["ip"], info.get("query"), info.get("country"), info.get("isp") or ""))
             return True
         add_event("全部候选失败"); return False
@@ -767,9 +790,32 @@ def watch_check():
             add_event("守候命中：%s 家宽节点出现（%s，%s），当前共 %d 个 — 仅通知，未自动连接"
                       % (h["cc"], h["ip"], h["isp"] or "未知ISP", h["count"]))
 
+# ---------------------------------------------------------------- favorites probe（冷备队列状态）
+def fav_probe():
+    """定时轻探收藏节点，把存活/时延写进 state.fav_status 供面板冷备队列显示。
+    只探测、不连接、不动隧道。"""
+    st = get_state()
+    favs = [ip for ip in st.get("favorites", []) if ip]
+    if not favs: return
+    nodes = enrich(fetch_nodes())
+    by_ip = {n["ip"]: n for n in nodes}
+    targets = [by_ip[ip] for ip in favs if ip in by_ip]
+    resp, unk = _preprobe(targets, timeout=2.5) if targets else ([], [])
+    rmap = {n["ip"]: m for n, m in resp}
+    umap = {n["ip"] for n in unk}
+    now = time.strftime("%H:%M:%S")
+    status = {}
+    for ip in favs:
+        if ip in rmap: status[ip] = {"ok": True, "ms": rmap[ip], "inpool": True, "t": now}
+        elif ip in umap: status[ip] = {"ok": None, "ms": None, "inpool": True, "t": now}
+        elif ip in by_ip: status[ip] = {"ok": False, "ms": None, "inpool": True, "t": now}
+        else: status[ip] = {"ok": False, "ms": None, "inpool": False, "t": now}
+    st = get_state(); st["fav_status"] = status; set_state(st)
+
 # ---------------------------------------------------------------- health loop
 def health_loop(cfg):
     last_watch = 0
+    last_fav = 0
     while True:
         time.sleep(30)
         try:
@@ -778,6 +824,10 @@ def health_loop(cfg):
                 last_watch = time.time()
                 try: watch_check()
                 except Exception as ex: print("[watch] error:", ex, flush=True)
+            if stw.get("favorites") and time.time() - last_fav >= 300:
+                last_fav = time.time()
+                try: fav_probe()
+                except Exception as ex: print("[fav] error:", ex, flush=True)
             st = get_state(); cur = st.get("current")
             if not cur: 
                 if st.get("mode") == "auto": connect_node(cfg, None, "")
@@ -841,6 +891,7 @@ button:hover{filter:brightness(1.08)}
 button.gray{background:#edf2f7;color:#27435c}
 button.red{background:#fff;color:#d3382c;border:1px solid #f0c6c2}
 button.sm{padding:4px 11px;font-size:12px;border-radius:8px}
+button.favb{background:#fff7e6;color:#a87b00;border:1px solid #ecd9a0}
 form{display:inline}
 .frow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:7px 0}
 .tblwrap{overflow-x:auto}
@@ -899,6 +950,7 @@ class Panel(BaseHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         cc = (q.get("cc") or [""])[0].upper()
         res_only = (q.get("res") or [""])[0] == "1"
+        fav_only = (q.get("fav") or [""])[0] == "1"
         st = get_state(); cur = st.get("current")
         mode = st.get("mode", "manual")
         mode_label = {"manual": "手动模式", "auto": "智能自动", "fixed-country": "固定国家", "fixed-ip": "固定 IP"}.get(mode, mode)
@@ -910,6 +962,9 @@ class Panel(BaseHTTPRequestHandler):
             res_all = sum(1 for n in nodes if n.get("residential") is True)
             cc_all = len(set(n["cc"] for n in nodes))
             if res_only: ranked = [n for n in ranked if n.get("residential") is True]
+            if fav_only:
+                favset0 = set(st.get("favorites", []))
+                ranked = [n for n in ranked if n["ip"] in favset0]
         except Exception as ex:
             nodes = []; ranked = []; res_ranked = 0; res_all = 0; cc_all = 0
             err_html = "<div class='card err'>节点列表拉取失败：%s</div>" % esc(ex)
@@ -940,7 +995,8 @@ class Panel(BaseHTTPRequestHandler):
         <form method=post action='%s/refresh'><button class=gray>刷新节点列表</button></form></div>
         <div class=frow><form method=get action='%s/'><label>筛选国家</label> <input name=cc size=3 value='%s' placeholder='JP/KR/US'>
         <label><input type=checkbox name=res value=1%s> 只看家宽</label>
-        <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "")
+        <label><input type=checkbox name=fav value=1%s> 只看收藏</label>
+        <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "", " checked" if fav_only else "")
         acct = """<div class=card><h2>账号设置</h2>
         <div class=frow><form method=post action='%s/account_panel'><label>面板登录</label> <input name=user size=12 value='%s' autocomplete=username>
         <input type=password name=pass1 size=14 placeholder='新密码（至少 8 位）' autocomplete=new-password>
@@ -962,7 +1018,37 @@ class Panel(BaseHTTPRequestHandler):
             base, esc(",".join(st.get("watch", []))),
             "".join("<option value='%d'%s>%d 分钟</option>" % (v, " selected" if int(st.get("watch_interval", 900)) == v else "", v // 60) for v in (300, 900, 1800)),
             "".join(wrows), hits_html)
+        favs_list = [ip for ip in st.get("favorites", []) if ip]
+        queue_card = ""
+        if favs_list:
+            fstat = st.get("fav_status", {})
+            by_ip = {n["ip"]: n for n in nodes}
+            qrows = []
+            pos = 0
+            for ip in favs_list:
+                nd = by_ip.get(ip)
+                fs = fstat.get(ip, {})
+                if cur and ip == cur.get("ip"):
+                    role = "<span class='badge now'>主节点</span>"
+                else:
+                    pos += 1
+                    role = "<span class=mut>冷备 %d</span>" % pos
+                if nd:
+                    place = "%s %s" % (flag(nd["cc"]), esc(nd["cc"]))
+                    ownq = esc((nd.get("isp") or "")[:16]) or "—"
+                else:
+                    place = "—"; ownq = "已下线（池中无）"
+                if fs.get("ok") is True: live = "<span class=badge>在线 %s ms</span>" % fs.get("ms")
+                elif fs and fs.get("ok") is None: live = "<span class=mut>待确认</span>"
+                elif fs: live = "<span class=mut>无响应</span>"
+                else: live = "<span class=mut>未探测</span>"
+                qrows.append("<tr%s><td>%s</td><td><b>%s</b></td><td>%s</td><td>%s</td><td>%s</td><td><form method=post action='%s/fav'><input type=hidden name=ip value='%s'><button class='sm red'>移除</button></form></td></tr>" % (
+                    " class=cur" if cur and ip == cur.get("ip") else "", role, esc(ip), place, ownq, live, base, esc(ip)))
+            queue_card = """<div class=card><h2>冷备队列（收藏驱动）</h2>
+            <div class=tblwrap><table class=plain><tr><th>顺位</th><th>IP</th><th>国家</th><th>归属</th><th>状态</th><th></th></tr>%s</table></div>
+            <div class=note>智能自动 / 固定国家模式下，主节点断开时按此队列顺序从收藏中顺延连接；收藏全部不可用时回落全局排行，不断网优先。手动 / 固定 IP 模式不自动顺延。状态每 5 分钟轻探刷新。</div></div>""" % "".join(qrows)
         hist = get_history()
+        favset = set(st.get("favorites", []))
         rows = []
         for n in ranked[:60]:
             e = hist.get(node_key(n), {})
@@ -976,10 +1062,10 @@ class Panel(BaseHTTPRequestHandler):
             is_cur = bool(cur) and n["ip"] == cur.get("ip")
             now = "<span class='badge now'>当前</span>" if is_cur else ""
             rows.append("<tr%s><td><b>%s</b></td><td>%s %s</td><td>%s</td><td>%s</td><td>%s ms</td><td>%s Mbps</td><td>%s</td><td>%s / %s</td><td><span class=rank>%s</span></td>"
-                        "<td>%s<form method=post action='%s/switch'><input type=hidden name=ip value='%s'><button class=sm>切换</button></form></td></tr>" % (
+                        "<td>%s<form method=post action='%s/switch'><input type=hidden name=ip value='%s'><button class=sm>切换</button></form> <form method=post action='%s/fav'><input type=hidden name=ip value='%s'><button class='sm favb'>%s</button></form></td></tr>" % (
                 " class=cur" if is_cur else "",
                 esc(n["ip"]), flag(n["cc"]), esc(n["cc"]), own, esc(n.get("proto", "")), n["ping"], round(n["speed"] / 1e6),
-                n["sessions"], ms, rate, n["rank"], now, base, esc(n["ip"])))
+                n["sessions"], ms, rate, n["rank"], now, base, esc(n["ip"]), base, esc(n["ip"]), "★" if n["ip"] in favset else "☆"))
         auto_btn = ""
         if cc:
             auto_btn = "<form method=post action='%s/auto'><input type=hidden name=cc value='%s'><button>连 %s 最优</button></form>" % (base, esc(cc), esc(cc))
@@ -989,7 +1075,7 @@ class Panel(BaseHTTPRequestHandler):
             esc(cc or "全部"), len(ranked), res_ranked, "" if cc else "，显示前 60", auto_btn, "".join(rows))
         ev = "\n".join("%s  %s" % (e["t"], e["msg"]) for e in st.get("events", [])[-15:][::-1])
         log = "<div class=card><h2>事件</h2><pre>%s</pre></div>" % esc(ev)
-        self._send(self._page("<div class=wrap>" + top + status + stats + err_html + ctrl + acct + watch_card + table + log + "</div>"))
+        self._send(self._page("<div class=wrap>" + top + status + queue_card + stats + err_html + ctrl + acct + watch_card + table + log + "</div>"))
 
     def do_POST(self):
         base = "/" + self.cfg["panel_path"]
@@ -1025,6 +1111,16 @@ class Panel(BaseHTTPRequestHandler):
             except Exception: st["watch_interval"] = 900
             set_state(st)
             add_event("守候名单更新：%s（间隔 %d 分钟，仅通知不连接）" % (",".join(codes) or "空", st["watch_interval"] // 60))
+            self.send_response(303); self.send_header("Location", base + "/"); self.end_headers()
+        elif action == "/fav":
+            ip = val("ip")
+            st = get_state(); favs = [x for x in st.get("favorites", []) if x]
+            removed = ip in favs
+            if removed: favs.remove(ip)
+            elif ip: favs.append(ip)
+            st["favorites"] = favs; set_state(st)
+            if removed: add_event("取消收藏 %s" % ip)
+            elif ip: add_event("收藏节点 %s（冷备队列第 %d 位）" % (ip, len(favs)))
             self.send_response(303); self.send_header("Location", base + "/"); self.end_headers()
         elif action == "/account_panel":
             kind = "panel"
