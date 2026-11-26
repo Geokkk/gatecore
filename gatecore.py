@@ -1012,7 +1012,7 @@ pre{background:#f4f8fb;border:1px solid #e3eaf1;color:#39536b;border-radius:12px
 .err{background:#fdf0ef;border-color:#f3d2cf;color:#a33327}
 """
 
-def esc(x): return str(x if x is not None else "").replace("&", "&amp;").replace("<", "&lt;")
+def esc(x): return str(x if x is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
 
 def flag(cc):
     cc = (cc or "").upper()
@@ -1042,7 +1042,7 @@ class Panel(BaseHTTPRequestHandler):
         base = "/" + self.cfg["panel_path"]
         if not self.path.startswith(base):
             self._send("<h1>404</h1>", 404); return
-        if self.path.split("?")[0] == base + "/logout":
+        if self.path.split("?")[0] in (base + "/logout", base + "/logout/"):
             # 退出登录：强制回 401，浏览器随即丢弃本面板缓存的 Basic 凭据
             body = ("<!DOCTYPE html><html lang=zh><head><meta charset=utf-8><title>已退出</title></head>"
                     "<body style='font-family:sans-serif;text-align:center;padding:60px 20px;color:#0f1f2e'>"
