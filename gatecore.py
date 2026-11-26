@@ -952,6 +952,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC
 .top h1{font-size:19px;margin:0;letter-spacing:.2px}
 .top .sub{color:#71808e;font-size:12px;margin-top:1px}
 .pill{margin-left:auto;background:#fff;border:1px solid #dfe7ee;color:#44586a;border-radius:999px;padding:4px 12px;font-size:12px;white-space:nowrap}
+.usermenu{position:relative;flex:none}
+.avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#0a84ff,#00b894);color:#fff;font-weight:700;font-size:15px;border:0;cursor:pointer;padding:0;box-shadow:0 4px 14px rgba(10,132,255,.30)}
+.menu{position:absolute;right:0;top:46px;width:288px;max-width:86vw;background:#fff;border:1px solid #e3eaf1;border-radius:16px;box-shadow:0 16px 40px rgba(15,31,46,.18);padding:16px;display:none;z-index:60}
+.menu.open{display:block}
+.menuhead{font-size:12px;color:#8494a3;margin-bottom:6px}
+.menuhead b{color:#0f1f2e;font-size:13px}
+.menu form{display:block}
+.menu label{display:block;margin:9px 0 4px}
+.menu input{width:100%}
+.menubtn{width:100%;margin-top:12px}
+.logout{display:block;text-align:center;margin-top:12px;padding:8px;border:1px solid #f0c6c2;border-radius:10px;color:#d3382c;font-size:13px;font-weight:600;text-decoration:none;background:#fff}
+.logout:hover{background:#fdf3f2}
+.menu .note{margin-top:10px}
 .card{background:#fff;border:1px solid #e3eaf1;border-radius:18px;padding:18px 20px;margin:0 0 14px;box-shadow:0 6px 24px rgba(31,68,120,.06)}
 .card h2{font-size:14px;margin:0 0 12px;color:#24384c;letter-spacing:.3px}
 .hero{display:flex;gap:13px;align-items:flex-start}
@@ -1029,6 +1042,16 @@ class Panel(BaseHTTPRequestHandler):
         base = "/" + self.cfg["panel_path"]
         if not self.path.startswith(base):
             self._send("<h1>404</h1>", 404); return
+        if self.path.split("?")[0] == base + "/logout":
+            # 退出登录：强制回 401，浏览器随即丢弃本面板缓存的 Basic 凭据
+            body = ("<!DOCTYPE html><html lang=zh><head><meta charset=utf-8><title>已退出</title></head>"
+                    "<body style='font-family:sans-serif;text-align:center;padding:60px 20px;color:#0f1f2e'>"
+                    "<h2>已退出登录</h2><p style='color:#71808e'>重新打开面板时将要求输入账号密码。</p>"
+                    "<p><a href='%s/'>重新登录</a></p></body></html>" % base).encode("utf-8")
+            self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="gatecore"')
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body); return
         if not self._auth_ok():
             self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="gatecore"')
             self.end_headers(); return
@@ -1055,6 +1078,22 @@ class Panel(BaseHTTPRequestHandler):
             nodes = []; ranked = []; res_ranked = 0; res_all = 0; cc_all = 0
             err_html = "<div class='card err'>节点列表拉取失败：%s</div>" % esc(ex)
         top = """<div class=top><div class=logo>G</div><div><h1>gatecore</h1><div class=sub>家宽出口核心 · VPN Gate</div></div><span class=pill>%s</span></div>""" % esc(mode_label)
+        uname = self.cfg["panel_user"]
+        usermenu = """<div class=usermenu><button type=button class=avatar id=avatarBtn title='账号菜单'>%s</button>
+        <div class=menu id=userMenu>
+        <div class=menuhead>当前账号 <b>%s</b></div>
+        <form method=post action='%s/account_panel'>
+        <label>面板登录账号</label><input name=user value='%s' autocomplete=username>
+        <label>新密码（至少 8 位）</label><input type=password name=pass1 autocomplete=new-password placeholder='输入新密码'>
+        <label>再输一次</label><input type=password name=pass2 autocomplete=new-password placeholder='再输一次'>
+        <button class=menubtn>修改账号密码</button></form>
+        <a class=logout href='%s/logout'>退出登录</a>
+        <div class=note>修改后，下次打开面板用新账号密码登录。网关凭据由安装时随机生成，不在此处修改（改它须同步客户端配置，见 config.json）。</div>
+        </div></div>
+        <script>var ab=document.getElementById('avatarBtn'),um=document.getElementById('userMenu');ab.addEventListener('click',function(e){e.stopPropagation();um.classList.toggle('open')});document.addEventListener('click',function(e){if(!um.contains(e.target))um.classList.remove('open')});document.addEventListener('keydown',function(e){if(e.key==='Escape')um.classList.remove('open')});</script>""" % (
+            esc((uname[:1] or "G").upper()), esc(uname), base, esc(uname), base)
+        # 头像菜单挂到顶栏右端（.top 是 flex，usermenu 插在 </div> 收尾之前）
+        top = top[:-len("</div>")] + usermenu + "</div>"
         if cur:
             ex = cur.get("exit") or {}
             speed_s = ("%s Mbps" % ex.get("speed_mbps")) if ex.get("speed_mbps") is not None else "—"
@@ -1086,12 +1125,6 @@ class Panel(BaseHTTPRequestHandler):
         <label><input type=checkbox name=res value=1%s> 只看家宽</label>
         <label><input type=checkbox name=fav value=1%s> 只看收藏</label>
         <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "", " checked" if fav_only else "")
-        acct = """<div class=card><h2>账号设置</h2>
-        <div class=frow><form method=post action='%s/account_panel'><label>面板登录</label> <input name=user size=12 value='%s' autocomplete=username>
-        <input type=password name=pass1 size=14 placeholder='新密码（至少 8 位）' autocomplete=new-password>
-        <input type=password name=pass2 size=14 placeholder='再输一次' autocomplete=new-password> <button>修改面板凭据</button></form></div>
-        <div class=note>面板凭据修改后，下次打开面板用新账号密码登录。网关凭据由安装时随机生成，不在此处修改：改它必须同步修改指向本网关的客户端配置（如 Xray 出站），操作不当会断链，属进阶操作（改 config.json 的 gateway_user / gateway_pass 并同步客户端）。</div></div>""" % (
-            base, esc(self.cfg["panel_user"]))
         wst = load_json(p("watch_state.json"), {})
         wrows = []
         for ccw in st.get("watch", []):
@@ -1164,7 +1197,7 @@ class Panel(BaseHTTPRequestHandler):
             esc(cc or "全部"), len(ranked), res_ranked, "" if cc else "，显示前 60", auto_btn, "".join(rows))
         ev = "\n".join("%s  %s" % (e["t"], e["msg"]) for e in st.get("events", [])[-15:][::-1])
         log = "<div class=card><h2>事件</h2><pre>%s</pre></div>" % esc(ev)
-        self._send(self._page("<div class=wrap>" + top + status + queue_card + stats + err_html + ctrl + acct + watch_card + table + log + "</div>"))
+        self._send(self._page("<div class=wrap>" + top + status + queue_card + stats + err_html + ctrl + watch_card + table + log + "</div>"))
 
     def do_POST(self):
         base = "/" + self.cfg["panel_path"]
