@@ -17,7 +17,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("GATECORE_DATA", BASE)
-API_URL = "https://www.vpngate.net/api/iphone/"
+API_URLS = [
+    "https://www.vpngate.net/api/iphone/",   # 官方主源（https）
+    "http://www.vpngate.net/api/iphone/",    # 官方备用路径（http）
+    # 第三方镜像：GitHub + jsDelivr 转存的官方 CSV（每小时更新）。官方每次只返回
+    # 全部志愿者的一小部分子集，各快照差异很大，多源并集能显著扩大节点池。
+    "https://cdn.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
+    "https://fastly.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
+]
+POOL_TTL = 172800   # 累积池：保留最后在线 48 小时内的节点
+POOL_MAX = 800      # 累积池上限，超出丢最久未见的
 TUN_DEV = os.environ.get("GATECORE_TUN", "geotun0")
 EXIT_CHECK_URL = "http://ip-api.com/json/?fields=status,query,country,countryCode,isp,org"
 
@@ -82,12 +91,10 @@ def add_event(msg):
     print("[event]", msg, flush=True)
 
 # ---------------------------------------------------------------- node list
-def fetch_nodes(force=False):
-    cache = p("nodes.json")
-    if not force and os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 900:
-        return load_json(cache, [])
-    req = urllib.request.Request(API_URL, headers={"User-Agent": "gatecore/1.0"})
-    raw = urllib.request.urlopen(req, timeout=45).read().decode("utf-8", "replace")
+def _fetch_one(url):
+    """抓一个源的 CSV 并解析成节点行；失败抛异常，由调用方容忍。"""
+    req = urllib.request.Request(url, headers={"User-Agent": "gatecore/1.0"})
+    raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
     lines = [l for l in raw.splitlines() if l and not l.startswith("*")]
     if len(lines) < 2: raise RuntimeError("API 返回异常")
     hdr = lines[0].lstrip("#").split(",")
@@ -105,8 +112,53 @@ def fetch_nodes(force=False):
                 "uptime": int(r["Uptime"]), "cfg": cfg_b64,
             })
         except Exception: continue
-    save_json(cache, rows)
     return rows
+
+def fetch_nodes(force=False):
+    """多源抓取 + 累积池。官方每次只返回全部志愿者的一小部分子集，各源、各时刻的
+    快照差异很大，所以抓取结果按 IP 并入持久池（nodes.json）：见过的节点保留
+    first_seen/last_seen，只淘汰 48 小时未再出现的。返回整个池（新鲜的在前）。
+    全部源失败时沿用旧池；无池可用才抛异常。"""
+    cache = p("nodes.json")
+    pool = load_json(cache, [])
+    if not isinstance(pool, list): pool = []
+    if not force and pool and os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 900:
+        return pool
+    now = int(time.time())
+    results = {}
+    def grab(url):
+        try: results[url] = _fetch_one(url)
+        except Exception as ex: results[url] = ex
+    threads = [threading.Thread(target=grab, args=(u,)) for u in API_URLS]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    fresh = []
+    for u in API_URLS:
+        r = results.get(u)
+        if isinstance(r, list): fresh.extend(r)
+        else: print("[fetch] 源失败 %s: %s" % (u, r), flush=True)
+    if not fresh:
+        if pool:
+            print("[fetch] 全部源失败，沿用累积池（%d 个）" % len(pool), flush=True)
+            return pool
+        raise RuntimeError("API 返回异常（全部源失败）")
+    by_ip = {}
+    for n in pool:
+        n.setdefault("first_seen", now); n.setdefault("last_seen", now)
+        by_ip[n["ip"]] = n
+    for row in fresh:
+        ip = row["ip"]
+        if ip in by_ip:
+            keep = by_ip[ip]; fs = keep.get("first_seen", now)
+            keep.update(row); keep["first_seen"] = fs; keep["last_seen"] = now
+        else:
+            row["first_seen"] = now; row["last_seen"] = now
+            by_ip[ip] = row
+    merged = [n for n in by_ip.values() if now - n.get("last_seen", now) <= POOL_TTL]
+    merged.sort(key=lambda n: -n.get("last_seen", now))
+    merged = merged[:POOL_MAX]
+    save_json(cache, merged)
+    return merged
 
 def parse_remote(cfg_text):
     """从 .ovpn 文本里取 (remote_host, port, proto, has_tls_auth)"""
