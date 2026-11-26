@@ -12,7 +12,7 @@ gatecore — 自研 VPN Gate 家宽出口核心 v1（纯 Python 标准库，零�
 运行：sudo python3 gatecore.py serve   （tun 与 SO_BINDTODEVICE 需要 root）
 """
 import base64, csv, hashlib, io, ipaddress, json, math, os, random, re
-import signal, socket, struct, subprocess, sys, threading, time, urllib.request
+import signal, socket, ssl, struct, subprocess, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -657,6 +657,85 @@ def exit_check(cfg, timeout=12):
                 body += chunk
     except Exception: return None
 
+# ---------------------------------------------------------------- exit measurement（实测速度 / 网页延时）
+def _socks_open(cfg, host, port, timeout=15):
+    """经自家 SOCKS 网关开一条 TCP 流（域名形式，网关侧解析），失败返回 None"""
+    try:
+        s = socket.create_connection(("127.0.0.1", cfg["gateway_port"]), timeout=timeout)
+        s.settimeout(timeout)
+        if cfg.get("gateway_user"):
+            s.sendall(b"\x05\x01\x02")
+            if s.recv(2) != b"\x05\x02": s.close(); return None
+            u = cfg["gateway_user"].encode(); pw = cfg["gateway_pass"].encode()
+            s.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(pw)]) + pw)
+            if s.recv(2) != b"\x01\x00": s.close(); return None
+        else:
+            s.sendall(b"\x05\x01\x00"); s.recv(2)
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(host)]) + host.encode() + struct.pack(">H", port))
+        rep = s.recv(10)
+        if len(rep) < 2 or rep[1] != 0: s.close(); return None
+        return s
+    except Exception: return None
+
+def measure_exit(cfg):
+    """经隧道实测当前出口：网页延时 = 一次完整 ip-api 请求的耗时；实测速度 =
+    经网关下载 1 MB 测试文件的吞吐（Cloudflare 测速端点优先，Tele2 备选）。
+    返回 {"web_ms": int, "speed_mbps": float|缺省} 或 None（出口不通时）。"""
+    t0 = time.time()
+    info = exit_check(cfg)
+    if not info or info.get("status") != "success": return None
+    out = {"web_ms": int((time.time() - t0) * 1000)}
+    for host, port, path, use_tls in (("speed.cloudflare.com", 443, "/__down?bytes=1000000", True),
+                                      ("speedtest.tele2.net", 80, "/1MB.zip", False)):
+        try:
+            s = _socks_open(cfg, host, port, timeout=15)
+            if s is None: continue
+            if use_tls:
+                s = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+            s.sendall(("GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: gatecore/1.0\r\n\r\n" % (path, host)).encode())
+            total = 0; buf = b""; body = False
+            t1 = time.time(); deadline = t1 + 20
+            while time.time() < deadline:
+                chunk = s.recv(65536)
+                if not chunk: break
+                if not body:
+                    buf += chunk
+                    if b"\r\n\r\n" in buf:
+                        body = True
+                        total += len(buf.split(b"\r\n\r\n", 1)[1])
+                    continue
+                total += len(chunk)
+            s.close()
+            dt = time.time() - t1
+            if total >= 100000 and dt > 0:
+                out["speed_mbps"] = round(total * 8 / dt / 1e6, 1)
+                break
+        except Exception: continue
+    return out
+
+def speed_loop(cfg):
+    """每 10 分钟经隧道实测一次速度/网页延时，写进 state.current.exit 供面板展示。
+    只测量、不动隧道；未连接时跳过。测速流量约 1 MB/次。"""
+    time.sleep(60)
+    while True:
+        try:
+            if get_state().get("current"):
+                r = measure_exit(cfg)
+                if r:
+                    st = get_state(); cur = st.get("current")
+                    if cur:
+                        ex = cur.get("exit") or {}
+                        ex["web_ms"] = r["web_ms"]
+                        if "speed_mbps" in r:
+                            ex["speed_mbps"] = r["speed_mbps"]
+                            ex["speed_t"] = time.strftime("%H:%M:%S")
+                        cur["exit"] = ex; st["current"] = cur; set_state(st)
+                        print("[speed] 网页延时 %s ms，实测速度 %s" % (
+                            r.get("web_ms"), ("%s Mbps" % r["speed_mbps"]) if "speed_mbps" in r else "未测出"), flush=True)
+        except Exception as ex:
+            print("[speed] error:", ex, flush=True)
+        time.sleep(600)
+
 # ---------------------------------------------------------------- connect logic
 def _preprobe(cands, timeout=2.5):
     """并发轻量探测一池候选：明确无响应的本轮直接淘汰（省掉每个死节点一次
@@ -832,13 +911,20 @@ def health_loop(cfg):
             if not cur: 
                 if st.get("mode") == "auto": connect_node(cfg, None, "")
                 continue
+            t_h = time.time()
             info = exit_check(cfg)
             if info and info.get("status") == "success":
                 if st.get("fail_count"):
                     st["fail_count"] = 0; set_state(st)
-                cur["exit"] = {"ip": info.get("query"), "cc": info.get("countryCode"),
-                               "country": info.get("country"), "isp": info.get("isp") or info.get("org"),
-                               "checked": time.strftime("%H:%M:%S")}
+                old_ex = cur.get("exit") or {}
+                new_ex = {"ip": info.get("query"), "cc": info.get("countryCode"),
+                          "country": info.get("country"), "isp": info.get("isp") or info.get("org"),
+                          "checked": time.strftime("%H:%M:%S"),
+                          "web_ms": int((time.time() - t_h) * 1000)}
+                if old_ex.get("speed_mbps") is not None:
+                    new_ex["speed_mbps"] = old_ex["speed_mbps"]
+                    new_ex["speed_t"] = old_ex.get("speed_t")
+                cur["exit"] = new_ex
                 st["current"] = cur; set_state(st)
             else:
                 st["fail_count"] = st.get("fail_count", 0) + 1; set_state(st)
@@ -971,14 +1057,17 @@ class Panel(BaseHTTPRequestHandler):
         top = """<div class=top><div class=logo>G</div><div><h1>gatecore</h1><div class=sub>家宽出口核心 · VPN Gate</div></div><span class=pill>%s</span></div>""" % esc(mode_label)
         if cur:
             ex = cur.get("exit") or {}
+            speed_s = ("%s Mbps" % ex.get("speed_mbps")) if ex.get("speed_mbps") is not None else "—"
+            web_s = ("%s ms" % ex.get("web_ms")) if ex.get("web_ms") is not None else "—"
             status = """<div class=card><div class=hero><div class=dot></div><div>
             <div class=exitip>%s</div>
             <div class=chips><span class='chip green'>已连接</span><span class=chip>%s %s</span><span class=chip>%s</span></div>
             </div><form method=post action='%s/disconnect' style='margin-left:auto'><button class=red>断开</button></form></div>
-            <div class=meta><div><span>经节点</span><b>%s</b></div><div><span>节点归属</span><b>%s</b></div><div><span>连接自</span><b>%s</b></div><div><span>最近验证</span><b>%s</b></div></div></div>""" % (
+            <div class=meta><div><span>经节点</span><b>%s</b></div><div><span>节点归属</span><b>%s</b></div><div><span>连接自</span><b>%s</b></div><div><span>最近验证</span><b>%s</b></div><div><span>实测速度</span><b>%s</b></div><div><span>网页延时</span><b>%s</b></div></div></div>""" % (
                 esc(ex.get("ip", "—")), flag(cur.get("country", "")), esc(ex.get("country", "")),
                 esc(ex.get("isp", "")), base,
-                esc(cur.get("ip", "")), esc(cur.get("country", "")), esc(cur.get("since", "")), esc(ex.get("checked", "")))
+                esc(cur.get("ip", "")), esc(cur.get("country", "")), esc(cur.get("since", "")), esc(ex.get("checked", "")),
+                esc(speed_s), esc(web_s))
         else:
             status = """<div class=card><div class=hero><div class='dot off'></div><div>
             <div class=exitip>未连接</div>
@@ -1184,6 +1273,8 @@ def main():
     elif cmd == "disconnect": disconnect()
     elif cmd == "check":
         print(json.dumps(exit_check(cfg), ensure_ascii=False))
+    elif cmd == "speedtest":
+        print(json.dumps(measure_exit(cfg), ensure_ascii=False))
     elif cmd == "watchcheck":
         watch_check()
         st = get_state()
@@ -1215,6 +1306,7 @@ def main():
             cfg["panel_bind"], cfg["panel_port"], cfg["panel_path"]), flush=True)
         threading.Thread(target=gateway_loop, args=(cfg,), daemon=True).start()
         threading.Thread(target=health_loop, args=(cfg,), daemon=True).start()
+        threading.Thread(target=speed_loop, args=(cfg,), daemon=True).start()
         threading.Thread(target=lambda: enrich(fetch_nodes()), daemon=True).start()
         Panel.cfg = cfg
         ThreadingHTTPServer((cfg["panel_bind"], cfg["panel_port"]), Panel).serve_forever()
