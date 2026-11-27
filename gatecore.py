@@ -789,15 +789,19 @@ def connect_node(cfg, target, cc_hint=""):
                 bonus = max(-20.0, min(20.0, (100.0 - pms) * 0.2)) if pms else 0.0
                 return -(rank_score(n, get_history()) + bonus)
             g_resp = sorted(((n, m) for n, m in resp if n["ip"] not in favset), key=_trial_key)
-            fav_trials = [n for n in (fav_in + fav_out)
-                          if node_key(n) in resp_keys or node_key(n) in unk_keys]
-            cands = (fav_trials + [n for n, _m in g_resp]
-                     + [n for n in unk if n["ip"] not in favset])[:8]
+            fav_in_trials = [n for n in fav_in
+                             if node_key(n) in resp_keys or node_key(n) in unk_keys]
+            fav_out_trials = [n for n in fav_out
+                              if node_key(n) in resp_keys or node_key(n) in unk_keys]
+            # 试连顺序与候选池保持一致：本国收藏 → 全局已响应 → 全局待试 → 他国收藏垫底。
+            # （旧写法把他国收藏并进首段，选了 US 也会先连上 JP 收藏。）
+            cands = (fav_in_trials + [n for n, _m in g_resp]
+                     + [n for n in unk if n["ip"] not in favset] + fav_out_trials)[:8]
             add_event("预探测：%d 个候选中 %d 个有响应、%d 个待试、%d 个无响应跳过"
                       % (len(pool), len(resp), len(unk), len(pool) - len(resp) - len(unk)))
             if favs:
                 add_event("冷备队列：收藏 %d 个（池中 %d），本轮 %d 个进入候选"
-                          % (len(favs), len(fav_nodes), len(fav_trials)))
+                          % (len(favs), len(fav_nodes), len(fav_in_trials) + len(fav_out_trials)))
             if not cands: cands = pool[:3]  # 探测全灭时兜底硬试前三名
         if not cands:
             add_event("无可用候选（国家 %s）" % (cc_hint or "全部")); return False
