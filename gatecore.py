@@ -26,7 +26,7 @@ API_URLS = [
     "https://fastly.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
 ]
 POOL_TTL = 172800   # 累积池：保留最后在线 48 小时内的节点
-POOL_MAX = 800      # 累积池上限，超出丢最久未见的
+POOL_MAX = 1200     # 累积池上限，超出丢最久未见的（1200 约 16 MB 池文件，小机内存可承受）
 TUN_DEV = os.environ.get("GATECORE_TUN", "geotun0")
 EXIT_CHECK_URL = "http://ip-api.com/json/?fields=status,query,country,countryCode,isp,org"
 
@@ -891,6 +891,48 @@ def fav_probe():
         else: status[ip] = {"ok": False, "ms": None, "inpool": False, "t": now}
     st = get_state(); st["fav_status"] = status; set_state(st)
 
+# ---------------------------------------------------------------- pool reachability sweep（全池可达轮探）
+def get_probe():
+    return load_json(p("probe.json"), {})
+
+def probe_sweep(batch=48):
+    """后台可达轮探一轮：挑最久未探的 batch 个节点并行 probe_node，结果写
+    probe.json（{ip: {ok: True/False/None, ms, t}}），并清掉已离开池子的条目。
+    只读池文件、不触发抓取、不动隧道；面板据此标注可达状态，免去逐个手点试错。"""
+    pool = load_json(p("nodes.json"), None)
+    if not pool: return 0
+    nodes = enrich(pool)
+    pr = get_probe()
+    pool_ips = set(n["ip"] for n in nodes)
+    for ip in list(pr):
+        if ip not in pool_ips: del pr[ip]
+    nodes.sort(key=lambda n: (pr.get(n["ip"]) or {}).get("t", 0))
+    cands = nodes[:batch]
+    results = {}
+    def work(n):
+        results[n["ip"]] = probe_node(n, timeout=2.5)
+    threads = [threading.Thread(target=work, args=(n,), daemon=True) for n in cands]
+    for t in threads: t.start()
+    for t in threads: t.join(7)
+    now = int(time.time())
+    for n in cands:
+        r = results.get(n["ip"])
+        if r is None: continue
+        ok, ms, note = r
+        pr[n["ip"]] = {"ok": ok, "ms": ms, "t": now}
+    save_json(p("probe.json"), pr)
+    return len(cands)
+
+def probe_loop():
+    time.sleep(30)
+    while True:
+        try:
+            did = probe_sweep()
+            if did: print("[probe] 本轮轮探 %d 个节点" % did, flush=True)
+        except Exception as ex:
+            print("[probe] error:", ex, flush=True)
+        time.sleep(60)
+
 # ---------------------------------------------------------------- health loop
 def health_loop(cfg):
     last_watch = 0
@@ -965,6 +1007,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC
 .logout{display:block;text-align:center;margin-top:12px;padding:8px;border:1px solid #f0c6c2;border-radius:10px;color:#d3382c;font-size:13px;font-weight:600;text-decoration:none;background:#fff}
 .logout:hover{background:#fdf3f2}
 .menu .note{margin-top:10px}
+.pdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .card{background:#fff;border:1px solid #e3eaf1;border-radius:18px;padding:18px 20px;margin:0 0 14px;box-shadow:0 6px 24px rgba(31,68,120,.06)}
 .card h2{font-size:14px;margin:0 0 12px;color:#24384c;letter-spacing:.3px}
 .hero{display:flex;gap:13px;align-items:flex-start}
@@ -1060,6 +1103,7 @@ class Panel(BaseHTTPRequestHandler):
         cc = (q.get("cc") or [""])[0].upper()
         res_only = (q.get("res") or [""])[0] == "1"
         fav_only = (q.get("fav") or [""])[0] == "1"
+        alive_only = (q.get("alive") or [""])[0] == "1"
         st = get_state(); cur = st.get("current")
         mode = st.get("mode", "manual")
         mode_label = {"manual": "手动模式", "auto": "智能自动", "fixed-country": "固定国家", "fixed-ip": "固定 IP"}.get(mode, mode)
@@ -1074,6 +1118,9 @@ class Panel(BaseHTTPRequestHandler):
             if fav_only:
                 favset0 = set(st.get("favorites", []))
                 ranked = [n for n in ranked if n["ip"] in favset0]
+            if alive_only:
+                prb0 = get_probe()
+                ranked = [n for n in ranked if (prb0.get(n["ip"]) or {}).get("ok") is True]
         except Exception as ex:
             nodes = []; ranked = []; res_ranked = 0; res_all = 0; cc_all = 0
             err_html = "<div class='card err'>节点列表拉取失败：%s</div>" % esc(ex)
@@ -1124,7 +1171,8 @@ class Panel(BaseHTTPRequestHandler):
         <div class=frow><form method=get action='%s/'><label>筛选国家</label> <input name=cc size=3 value='%s' placeholder='JP/KR/US'>
         <label><input type=checkbox name=res value=1%s> 只看家宽</label>
         <label><input type=checkbox name=fav value=1%s> 只看收藏</label>
-        <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "", " checked" if fav_only else "")
+        <label><input type=checkbox name=alive value=1%s> 只看可达</label>
+        <button class=gray>筛选</button></form></div></div>""" % (base, modes, esc(st.get("cc", "")), base, base, esc(cc), " checked" if res_only else "", " checked" if fav_only else "", " checked" if alive_only else "")
         wst = load_json(p("watch_state.json"), {})
         wrows = []
         for ccw in st.get("watch", []):
@@ -1170,6 +1218,7 @@ class Panel(BaseHTTPRequestHandler):
             <div class=tblwrap><table class=plain><tr><th>顺位</th><th>IP</th><th>国家</th><th>归属</th><th>状态</th><th></th></tr>%s</table></div>
             <div class=note>智能自动 / 固定国家模式下，主节点断开时按此队列顺序从收藏中顺延连接；收藏全部不可用时回落全局排行，不断网优先。手动 / 固定 IP 模式不自动顺延。状态每 5 分钟轻探刷新。</div></div>""" % "".join(qrows)
         hist = get_history()
+        prb = get_probe()
         favset = set(st.get("favorites", []))
         rows = []
         for n in ranked[:60]:
@@ -1183,17 +1232,34 @@ class Panel(BaseHTTPRequestHandler):
             own = badge + " " + esc((n.get("isp") or "")[:16])
             is_cur = bool(cur) and n["ip"] == cur.get("ip")
             now = "<span class='badge now'>当前</span>" if is_cur else ""
-            rows.append("<tr%s><td><b>%s</b></td><td>%s %s</td><td>%s</td><td>%s</td><td>%s ms</td><td>%s Mbps</td><td>%s</td><td>%s / %s</td><td><span class=rank>%s</span></td>"
+            pe = prb.get(n["ip"])
+            if pe and pe.get("ok") is True:
+                dot = "<span class=pdot style='background:#1db954' title='可达 · %s ms · %s 探测'></span>" % (pe.get("ms"), time.strftime("%H:%M", time.localtime(pe.get("t", 0))))
+            elif pe and pe.get("ok") is False:
+                dot = "<span class=pdot style='background:#d3382c' title='不可达 · %s 探测'></span>" % time.strftime("%H:%M", time.localtime(pe.get("t", 0)))
+            elif pe:
+                dot = "<span class=pdot style='background:#c3ced8' title='无法探测（tls-auth）'></span>"
+            else:
+                dot = "<span class=pdot style='background:#dbe4ec' title='未探测'></span>"
+            if tot:
+                cell = "%s / %s" % (ms, rate)
+            elif pe and pe.get("ok") is True:
+                cell = "<span class=badge>可达 %s ms</span>" % pe.get("ms")
+            elif pe and pe.get("ok") is False:
+                cell = "<span class=mut>不可达</span>"
+            else:
+                cell = "%s / %s" % (ms, rate)
+            rows.append("<tr%s><td>%s<b>%s</b></td><td>%s %s</td><td>%s</td><td>%s</td><td>%s ms</td><td>%s Mbps</td><td>%s</td><td>%s</td><td><span class=rank>%s</span></td>"
                         "<td>%s<form method=post action='%s/switch'><input type=hidden name=ip value='%s'><button class=sm>切换</button></form> <form method=post action='%s/fav'><input type=hidden name=ip value='%s'><button class='sm favb'>%s</button></form></td></tr>" % (
-                " class=cur" if is_cur else "",
+                " class=cur" if is_cur else "", dot,
                 esc(n["ip"]), flag(n["cc"]), esc(n["cc"]), own, esc(n.get("proto", "")), n["ping"], round(n["speed"] / 1e6),
-                n["sessions"], ms, rate, n["rank"], now, base, esc(n["ip"]), base, esc(n["ip"]), "★" if n["ip"] in favset else "☆"))
+                n["sessions"], cell, n["rank"], now, base, esc(n["ip"]), base, esc(n["ip"]), "★" if n["ip"] in favset else "☆"))
         auto_btn = ""
         if cc:
             auto_btn = "<form method=post action='%s/auto'><input type=hidden name=cc value='%s'><button>连 %s 最优</button></form>" % (base, esc(cc), esc(cc))
         table = """<div class=card><h2>节点（%s，共 %d 个，家宽 %d 个%s）</h2><div class=frow>%s</div>
         <div class=tblwrap><table><tr><th>IP</th><th>国家</th><th>归属</th><th>协议</th><th>API延迟</th><th>速度</th><th>在线</th><th>实测 / 成功率</th><th>评分</th><th></th></tr>%s</table></div>
-        <div class=note>归属按主机名 / 运营者 / ip-api 多信号判定：vpn+数字主机名或个人运营者 = 家宽，public-vpn 学术服务器与机房归属 = 机房。实测与成功率来自本机历史连接记录，越用越准；评分含家宽 / UDP / 实测时延加权。</div></div>""" % (
+        <div class=note>归属按主机名 / 运营者 / ip-api 多信号判定：vpn+数字主机名或个人运营者 = 家宽，public-vpn 学术服务器与机房归属 = 机房。实测与成功率来自本机历史连接记录，越用越准；评分含家宽 / UDP / 实测时延加权。IP 前的圆点是后台可达轮探（约 25 分钟轮完一遍全池）：绿 = 可达、红 = 不可达、灰 = 未探或 tls-auth 探不了；没有历史记录的节点，实测列直接显示轮探结果，也可用「只看可达」先筛掉死节点。</div></div>""" % (
             esc(cc or "全部"), len(ranked), res_ranked, "" if cc else "，显示前 60", auto_btn, "".join(rows))
         ev = "\n".join("%s  %s" % (e["t"], e["msg"]) for e in st.get("events", [])[-15:][::-1])
         log = "<div class=card><h2>事件</h2><pre>%s</pre></div>" % esc(ev)
@@ -1340,6 +1406,7 @@ def main():
         threading.Thread(target=gateway_loop, args=(cfg,), daemon=True).start()
         threading.Thread(target=health_loop, args=(cfg,), daemon=True).start()
         threading.Thread(target=speed_loop, args=(cfg,), daemon=True).start()
+        threading.Thread(target=probe_loop, daemon=True).start()
         threading.Thread(target=lambda: enrich(fetch_nodes()), daemon=True).start()
         Panel.cfg = cfg
         ThreadingHTTPServer((cfg["panel_bind"], cfg["panel_port"]), Panel).serve_forever()
