@@ -1348,6 +1348,16 @@ def main():
         import collections
         print("节点 %d 个，国家 %d 个" % (len(nodes), len(set(collections.Counter(n['cc'] for n in nodes)))))
         print(collections.Counter(n["cc"] for n in nodes).most_common(10))
+    elif cmd == "countries":
+        nodes = enrich(fetch_nodes())
+        agg = {}
+        for n in nodes:
+            a = agg.setdefault(n["cc"], {"name": n["country"], "total": 0, "res": 0})
+            a["total"] += 1
+            if n.get("residential") is True: a["res"] += 1
+        print("可选国家（共 %d 个，节点 %d 个）：" % (len(agg), len(nodes)))
+        for cc, a in sorted(agg.items(), key=lambda kv: -kv[1]["total"]):
+            print("  %-3s %-24s %4d 个（家宽 %d）" % (cc, a["name"][:24], a["total"], a["res"]))
     elif cmd == "list":
         cc = (sys.argv[2] if len(sys.argv) > 2 else "").upper() or None
         for n in rank(enrich(fetch_nodes()), cc)[:10]:

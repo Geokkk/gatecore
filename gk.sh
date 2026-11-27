@@ -322,7 +322,8 @@ while true; do
   case "$C" in
     1) show_status ;;
     2) (cd "$GC_DIR" && python3 gatecore.py list) ;;
-    3) read -rp "国家代码 (如 JP): " CC || true
+    3) (cd "$GC_DIR" && python3 gatecore.py countries)
+       read -rp "国家代码 (如 JP): " CC || true
        (cd "$GC_DIR" && python3 gatecore.py list "${CC:-JP}") ;;
     4) read -rp "国家代码 [回车=JP]: " CC || true
        (cd "$GC_DIR" && python3 gatecore.py connect "${CC:-JP}") ;;
