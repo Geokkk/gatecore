@@ -39,7 +39,9 @@ def load_json(path, default):
     except Exception: return default
 
 def save_json(path, obj):
-    tmp = path + ".tmp"
+    # 临时名带 pid+线程号：面板/健康/轮探等多个线程（及 CLI 进程）会并发存同一文件，
+    # 共用同一个 .tmp 时 os.replace 会互相抢文件（ENOENT），甚至覆盖彼此内容。
+    tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
     with open(tmp, "w", encoding="utf-8") as f: json.dump(obj, f, ensure_ascii=False, indent=1)
     # 保留属主与权限: 原文件在则跟随原文件, 否则跟随所在目录。
     # 否则 root 保存会把属主翻转, 低权限进程 (如守候巡查) 读不到文件时
